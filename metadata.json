@@ -1,0 +1,6 @@
+{
+  "name": "Baton Audio Sync",
+  "description": "Cross-platform synchronized group audio sharing app with YouTube Music playback, first-come-first-served baton handoff, private rooms, ambient background mode, and React Native mobile code.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
