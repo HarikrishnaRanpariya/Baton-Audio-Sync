@@ -17,6 +17,7 @@ interface BatonManagerProps {
   onRequestBaton: () => void;
   onCancelRequest: () => void;
   onPassBatonNext: () => void;
+  onReleaseBaton: () => void;
   onClaimBaton: () => void;
   onOpenMusicSearch: () => void;
   onOpenNotificationSettings?: () => void;
@@ -29,6 +30,7 @@ export const BatonManager: React.FC<BatonManagerProps> = ({
   onRequestBaton,
   onCancelRequest,
   onPassBatonNext,
+  onReleaseBaton,
   onClaimBaton,
   onOpenMusicSearch,
   onOpenNotificationSettings,
@@ -241,7 +243,7 @@ export const BatonManager: React.FC<BatonManagerProps> = ({
                 </button>
                 <button
                   id="pass-baton-button"
-                  onClick={handlePassWithConfetti}
+                  onClick={nextRequester ? handlePassWithConfetti : onReleaseBaton}
                   className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-purple-600/30 transition cursor-pointer"
                 >
                   <ArrowRight className="w-3.5 h-3.5" />

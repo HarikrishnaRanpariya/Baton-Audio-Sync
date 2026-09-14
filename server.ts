@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
+import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 
@@ -274,6 +275,28 @@ async function startServer() {
   const server = http.createServer(app);
 
   app.use(express.json());
+  const upload = multer({
+    dest: path.join(process.cwd(), 'public', 'audio-uploads'),
+    limits: { fileSize: 50 * 1024 * 1024 },
+    fileFilter: (_req, file, callback) => {
+      const isAudioMime = file.mimetype.startsWith('audio/');
+      const isAudioExtension = /\.(mp3|m4a|aac|wav|ogg|oga|flac|webm)$/i.test(file.originalname);
+      callback(null, isAudioMime || isAudioExtension);
+    },
+  });
+  app.use('/audio-uploads', express.static(path.join(process.cwd(), 'public', 'audio-uploads')));
+
+  app.post('/api/audio-upload', upload.single('file'), (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ error: 'Only MP3, M4A, AAC, WAV, OGG, FLAC, or WEBM audio files are supported.' });
+      return;
+    }
+    res.json({
+      url: `${req.protocol}://${req.get('host')}/audio-uploads/${req.file.filename}`,
+      mimeType: req.file.mimetype,
+      originalName: req.file.originalname,
+    });
+  });
 
   // WebSocket Server
   const wss = new WebSocketServer({ server });
@@ -426,6 +449,44 @@ async function startServer() {
           });
         }
 
+        // Host-only member removal
+        if (type === 'room:remove_member') {
+          const room = rooms.get(roomId);
+          if (!room || room.hostId !== user.id) return;
+          const targetUserId = data?.targetUserId;
+          if (!targetUserId || targetUserId === room.hostId) return;
+          room.members.delete(targetUserId);
+          room.pendingMembers.delete(targetUserId);
+          room.baton.queue = room.baton.queue.filter((q) => q.userId !== targetUserId);
+          if (room.baton.currentOwnerId === targetUserId) {
+            room.baton.currentOwnerId = null;
+            room.baton.currentOwnerName = null;
+            room.baton.acquiredAt = null;
+          }
+          wss.clients.forEach((client) => {
+            const target = client as ClientSocket;
+            if (target.userId === targetUserId && target.readyState === WebSocket.OPEN) {
+              target.send(JSON.stringify({ type: 'room:removed', message: 'You were removed from this group by the host.' }));
+              target.close();
+            }
+          });
+          broadcastRoom(roomId, { type: 'room:sync', data: serializeRoom(room) });
+        }
+
+        // Host-only group deletion
+        if (type === 'room:delete') {
+          const room = rooms.get(roomId);
+          if (!room || room.hostId !== user.id) return;
+          rooms.delete(roomId);
+          wss.clients.forEach((client) => {
+            const target = client as ClientSocket;
+            if (target.roomId === roomId && target.readyState === WebSocket.OPEN) {
+              target.send(JSON.stringify({ type: 'room:deleted', message: 'This group was deleted by the host.' }));
+              target.close();
+            }
+          });
+        }
+
         // Ask for Baton (FIFO queue)
         if (type === 'baton:request') {
           const room = rooms.get(roomId);
@@ -551,6 +612,28 @@ async function startServer() {
               data: serializeRoom(room),
             });
           }
+        }
+
+        // Explicitly release the baton when nobody is waiting.
+        if (type === 'baton:release') {
+          const room = rooms.get(roomId);
+          if (!room || room.baton.currentOwnerId !== user.id) return;
+
+          room.baton.currentOwnerId = null;
+          room.baton.currentOwnerName = null;
+          room.baton.acquiredAt = null;
+          room.chat.push({
+            id: `baton-release-${Date.now()}`,
+            userId: 'system',
+            userName: 'System',
+            text: `${user.name} released the baton. Anyone can claim it now!`,
+            type: 'baton',
+            timestamp: Date.now(),
+          });
+          broadcastRoom(roomId, {
+            type: 'room:sync',
+            data: serializeRoom(room),
+          });
         }
 
         // Claim open or orphaned baton
@@ -682,6 +765,8 @@ async function startServer() {
           const newSongItem = {
             id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             videoId: song.videoId,
+            sourceUrl: song.sourceUrl,
+            sourceType: song.sourceType,
             title: song.title,
             artist: song.artist,
             thumbnail: song.thumbnail || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80',
@@ -804,6 +889,16 @@ async function startServer() {
         if (type === 'queue:next_track' || type === 'playback:next') {
           const room = rooms.get(roomId);
           if (!room) return;
+
+          const isOwnerInRoom = room.baton.currentOwnerId && room.members.has(room.baton.currentOwnerId);
+          const canAdvance = room.baton.currentOwnerId === user.id || room.members.size <= 1 || !isOwnerInRoom;
+          if (!canAdvance) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Baton required: only the baton holder can skip to the next song.',
+            }));
+            return;
+          }
 
           const currentSong = room.playback.currentSong;
 

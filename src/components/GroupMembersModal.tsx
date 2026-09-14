@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RoomMember, UserProfile } from '../types';
-import { Users, Crown, Shield, ShieldCheck, Check, X, Copy, QrCode, Share2 } from 'lucide-react';
+import { Users, Crown, Shield, ShieldCheck, Check, X, Copy, Share2, UserMinus, Trash2 } from 'lucide-react';
 import QRCode from 'qrcode';
 
 interface GroupMembersModalProps {
@@ -14,6 +14,8 @@ interface GroupMembersModalProps {
   batonOwnerId: string | null;
   onApproveMember: (userId: string) => void;
   onRejectMember: (userId: string) => void;
+  onRemoveMember: (userId: string) => void;
+  onDeleteRoom: () => void;
   onClose: () => void;
 }
 
@@ -28,6 +30,8 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({
   batonOwnerId,
   onApproveMember,
   onRejectMember,
+  onRemoveMember,
+  onDeleteRoom,
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<'members' | 'requests' | 'share'>('members');
@@ -93,6 +97,17 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({
           </button>
         </div>
 
+        {isHost && (
+          <button
+            onClick={() => {
+              if (window.confirm('Delete this group for everyone? This cannot be undone.')) onDeleteRoom();
+            }}
+            className="mt-3 self-end px-3 py-1.5 rounded-xl bg-pink-500/10 hover:bg-pink-500/20 border border-pink-500/30 text-pink-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Delete group
+          </button>
+        )}
+
         {/* Tab switcher */}
         <div className="flex items-center gap-2 mt-4 p-1 bg-white/5 border border-white/10 rounded-xl">
           <button
@@ -146,7 +161,7 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({
                   key={member.id}
                   className="flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/10"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     <span className="text-2xl">{member.avatar || '🎧'}</span>
                     <div>
                       <div className="text-sm font-bold text-white flex items-center gap-2">
@@ -167,6 +182,17 @@ export const GroupMembersModal: React.FC<GroupMembersModalProps> = ({
                       </p>
                     </div>
                   </div>
+                  {isHost && !member.isHost && (
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Remove ${member.name} from this group?`)) onRemoveMember(member.id);
+                      }}
+                      title="Remove member"
+                      className="p-2 rounded-xl bg-white/5 hover:bg-pink-500/20 text-white/50 hover:text-pink-300 border border-white/5 cursor-pointer"
+                    >
+                      <UserMinus className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               );
             })}

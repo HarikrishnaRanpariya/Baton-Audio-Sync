@@ -102,6 +102,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
   const [customUrl, setCustomUrl] = useState('');
   const [customTitle, setCustomTitle] = useState('');
   const [customArtist, setCustomArtist] = useState('');
+  const [fileError, setFileError] = useState('');
   const [urlError, setUrlError] = useState('');
   const [addedNotification, setAddedNotification] = useState<string | null>(null);
 
@@ -165,6 +166,23 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
     setUrlError('');
 
     const videoId = extractYouTubeVideoId(customUrl);
+    if (!videoId && /^https?:\/\//i.test(customUrl.trim())) {
+      const song: SongItem = {
+        id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        videoId: '',
+        sourceUrl: customUrl.trim(),
+        sourceType: 'audio-url',
+        title: customTitle.trim() || 'Online audio track',
+        artist: customArtist.trim() || 'Online source',
+        thumbnail: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
+        duration: 240,
+        addedBy: currentUserId,
+        addedByName: currentUserName,
+      };
+      onSelectSong(song, false);
+      setAddedNotification(`Added "${song.title}" to Master Queue`);
+      return;
+    }
     if (!videoId) {
       setUrlError('Could not extract a valid YouTube video ID. Please check the URL.');
       return;
@@ -187,6 +205,48 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
     setCustomUrl('');
     setCustomTitle('');
     setCustomArtist('');
+  };
+
+  const handleLocalFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const isAudioFile = file.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|oga|flac|webm)$/i.test(file.name);
+    if (!isAudioFile) {
+      setFileError('Choose an audio file such as MP3, M4A, WAV, or OGG.');
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    setFileError('Uploading audio file...');
+    let upload: { url: string; originalName: string };
+    try {
+      const response = await fetch('/api/audio-upload', { method: 'POST', body: formData });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.error || 'Upload failed');
+      }
+      upload = await response.json();
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : 'Could not upload this file to the room server.');
+      return;
+    }
+    const song: SongItem = {
+      id: `local-${Date.now()}`,
+      videoId: '',
+      sourceUrl: upload.url,
+      sourceType: 'audio-url',
+      title: upload.originalName.replace(/\.[^.]+$/, ''),
+      artist: 'Uploaded room track',
+      thumbnail: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
+      duration: 240,
+      addedBy: currentUserId,
+      addedByName: currentUserName,
+    };
+    onSelectSong(song, false);
+    setFileError('');
+    setAddedNotification(`Added ${song.title} for the room`);
+    setTimeout(() => setAddedNotification(null), 2500);
+    event.target.value = '';
   };
 
   // Trigger AI generation
@@ -456,8 +516,15 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
                 className="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-white/40 focus:outline-none focus:border-purple-500 transition"
               />
               <p className="text-[11px] text-white/40 mt-1">
-                Supports standard YouTube videos, YouTube Shorts, and YouTube Music streams.
+                YouTube links use the embedded player. Direct audio URLs are played with the browser audio engine.
               </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+              <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-2">Audio file on this device</label>
+              <input type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.flac,.webm" onChange={handleLocalFile} className="w-full text-xs text-white/70 file:mr-3 file:rounded-xl file:border-0 file:bg-purple-600 file:px-3 file:py-2 file:text-white file:font-semibold" />
+              <p className="text-[11px] text-white/40 mt-2">Local files play only on this device. They are not uploaded or shared with the room.</p>
+              {fileError && <p className="text-xs text-pink-300 mt-2">{fileError}</p>}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

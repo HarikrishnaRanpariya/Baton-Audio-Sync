@@ -196,6 +196,15 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    socketRef.current?.close();
+    socketRef.current = null;
+    setRoomData(null);
+    setIsConnected(false);
+    setIsPendingApproval(false);
     localStorage.removeItem(STORAGE_KEY_USER);
     setCurrentUser(null);
     setShowLoginModal(true);
@@ -235,6 +244,14 @@ export default function App() {
           setIsPendingApproval(false);
         } else if (message.type === 'room:pending_approval') {
           setIsPendingApproval(true);
+        } else if (message.type === 'room:removed' || message.type === 'room:deleted') {
+          window.alert(message.message);
+          setRoomData(null);
+          setShowMembersModal(false);
+          localStorage.removeItem(STORAGE_KEY_USER);
+          setCurrentUser(null);
+          setShowLoginModal(true);
+          ws.close();
         } else if (message.type === 'notification:toast') {
           sendAlert({
             title: message.title || 'Room Queue Alert',
@@ -265,6 +282,7 @@ export default function App() {
     };
 
     ws.onclose = () => {
+      if (socketRef.current !== ws) return;
       setIsConnected(false);
       // Reconnect after 2 seconds
       reconnectTimeoutRef.current = setTimeout(() => {
@@ -301,18 +319,6 @@ export default function App() {
     }
   };
 
-  // Auto-claim baton if user is the sole member in the room or current baton owner is inactive/orphaned
-  useEffect(() => {
-    if (!roomData || !currentUser) return;
-    const isOnlyMember = roomData.members.length === 1 && roomData.members[0].id === currentUser.id;
-    const isOwnerActive = roomData.baton.currentOwnerId
-      ? roomData.members.some((m) => m.id === roomData.baton.currentOwnerId)
-      : false;
-    if ((isOnlyMember || !isOwnerActive) && roomData.baton.currentOwnerId !== currentUser.id) {
-      sendSocketEvent('baton:claim');
-    }
-  }, [roomData?.members?.length, roomData?.baton?.currentOwnerId, currentUser?.id]);
-
   // Baton Actions
   const handleRequestBaton = () => {
     sendSocketEvent('baton:request');
@@ -324,6 +330,10 @@ export default function App() {
 
   const handlePassBatonNext = () => {
     sendSocketEvent('baton:pass_next');
+  };
+
+  const handleReleaseBaton = () => {
+    sendSocketEvent('baton:release');
   };
 
   const handleClaimBaton = () => {
@@ -398,6 +408,14 @@ export default function App() {
     sendSocketEvent('room:reject_member', { targetUserId });
   };
 
+  const handleRemoveMember = (targetUserId: string) => {
+    sendSocketEvent('room:remove_member', { targetUserId });
+  };
+
+  const handleDeleteRoom = () => {
+    sendSocketEvent('room:delete');
+  };
+
   // Chat message
   const handleSendMessage = (text: string, type: 'chat' | 'reaction' = 'chat') => {
     sendSocketEvent('chat:send', { text, type });
@@ -431,6 +449,7 @@ export default function App() {
           isAmbientActive={ambientMode}
           onToggleAmbient={toggleAmbientMode}
           onClaimBaton={handleClaimBaton}
+          onRequestBaton={handleRequestBaton}
           isSoloMember={isSoloMember}
         />
       )}
@@ -510,6 +529,7 @@ export default function App() {
           onRequestBaton={handleRequestBaton}
           onCancelRequest={handleCancelBatonRequest}
           onPassBatonNext={handlePassBatonNext}
+          onReleaseBaton={handleReleaseBaton}
           onClaimBaton={handleClaimBaton}
           onOpenMusicSearch={() => setShowMusicSearch(true)}
           onOpenNotificationSettings={() => setShowNotificationModal(true)}
@@ -681,16 +701,26 @@ export default function App() {
 
             {/* Current User Chip */}
             {currentUser && (
-              <button
-                onClick={() => setShowLoginModal(true)}
-                title="Click to switch profile or room"
-                className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition"
-              >
-                <span className="text-sm">{currentUser.avatar}</span>
-                <span className="text-xs font-semibold text-purple-300 hidden sm:inline max-w-[80px] truncate">
-                  {currentUser.name}
-                </span>
-              </button>
+              <>
+                <button
+                  onClick={handleLogout}
+                  title="Exit room and log out"
+                  className="px-3 py-1.5 rounded-full bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Exit room</span>
+                </button>
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  title="Switch profile or room"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition"
+                >
+                  <span className="text-sm">{currentUser.avatar}</span>
+                  <span className="text-xs font-semibold text-purple-300 hidden sm:inline max-w-[80px] truncate">
+                    {currentUser.name}
+                  </span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -759,6 +789,8 @@ export default function App() {
           batonOwnerId={roomData.baton.currentOwnerId}
           onApproveMember={handleApproveMember}
           onRejectMember={handleRejectMember}
+          onRemoveMember={handleRemoveMember}
+          onDeleteRoom={handleDeleteRoom}
           onClose={() => setShowMembersModal(false)}
         />
       )}

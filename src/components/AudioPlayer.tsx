@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PlaybackState, SongItem } from '../types';
-import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand } from 'lucide-react';
 import { PersonalVolumeMixer } from './PersonalVolumeMixer';
 
 interface AudioPlayerProps {
@@ -12,6 +12,7 @@ interface AudioPlayerProps {
   isAmbientActive?: boolean;
   onToggleAmbient?: () => void;
   onClaimBaton?: () => void;
+  onRequestBaton?: () => void;
   isSoloMember?: boolean;
 }
 
@@ -31,11 +32,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   isAmbientActive,
   onToggleAmbient,
   onClaimBaton,
+  onRequestBaton,
   isSoloMember = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const [localCurrentTime, setLocalCurrentTime] = useState(playback.currentTime);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
@@ -43,11 +46,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [playerReady, setPlayerReady] = useState(false);
   const [audioLatencyMs, setAudioLatencyMs] = useState(45);
   const [isScrubbing, setIsScrubbing] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [youtubeError, setYoutubeError] = useState<number | null>(null);
+  const [isMobileViewport] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 639px)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  });
 
   const currentSong = playback.currentSong;
+  const isAudioSource = Boolean(currentSong?.sourceUrl);
 
   // Initialize YouTube Iframe Player
   useEffect(() => {
+    if (isAudioSource) return;
     let checkInterval: any = null;
 
     const initPlayer = () => {
@@ -57,10 +68,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       playerRef.current = new window.YT.Player('youtube-player-element', {
         height: '100%',
         width: '100%',
+        host: 'https://www.youtube-nocookie.com',
         videoId: currentSong ? currentSong.videoId : '4NRXx6U8ABQ',
         playerVars: {
           autoplay: playback.isPlaying ? 1 : 0,
-          controls: 0,
+          controls: isMobileViewport ? 1 : 0,
+          playsinline: 1,
+          enablejsapi: 1,
           disablekb: 1,
           fs: 0,
           modestbranding: 1,
@@ -68,7 +82,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           origin: window.location.origin,
         },
         events: {
+          onError: (event: any) => {
+            setYoutubeError(event.data);
+            setAudioUnlocked(false);
+          },
           onReady: (event: any) => {
+            setYoutubeError(null);
             setPlayerReady(true);
             try {
               if (isMuted) {
@@ -89,7 +108,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   event.target.seekTo(expectedTime, true);
                 }
                 if (typeof event.target?.playVideo === 'function') {
-                  event.target.playVideo();
+                  window.setTimeout(() => event.target?.playVideo?.(), 150);
                 }
               }
             } catch (err) {
@@ -122,6 +141,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
   }, []);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !isAudioSource || !currentSong?.sourceUrl) return;
+    if (audio.src !== currentSong.sourceUrl) {
+      audio.src = currentSong.sourceUrl;
+      audio.currentTime = playback.currentTime || 0;
+    }
+    audio.volume = isMuted ? 0 : volume / 100;
+    if (playback.isPlaying) audio.play().catch(() => setAudioUnlocked(false));
+    else audio.pause();
+  }, [currentSong?.sourceUrl, playback.isPlaying, isAudioSource, isMuted, volume]);
+
   // Compute expected server playback timestamp accounting for network transit
   const calculateExpectedTime = () => {
     if (!playback.isPlaying) {
@@ -135,15 +166,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   // Synchronize player with authoritative playback state changes
   useEffect(() => {
     if (!playerRef.current || !playerReady) return;
+    if (isAudioSource) return;
 
     try {
       // 1. Song changed?
       if (currentSong && currentSong.videoId) {
         const currentLoaded = playerRef.current.getVideoData?.()?.video_id;
         if (currentLoaded !== currentSong.videoId) {
+          setYoutubeError(null);
           const expected = calculateExpectedTime();
           playerRef.current.loadVideoById(currentSong.videoId, expected);
-          if (!playback.isPlaying) {
+          if (playback.isPlaying) {
+            window.setTimeout(() => playerRef.current?.playVideo?.(), 150);
+          } else {
             playerRef.current.pauseVideo();
           }
           return;
@@ -178,6 +213,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       console.warn('YouTube sync glitch handled:', err);
     }
   }, [playback.isPlaying, playback.currentSong?.videoId, playback.currentTime, playback.updatedAt, playerReady]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !isAudioSource || !Number.isFinite(playback.currentTime)) return;
+    const expectedTime = calculateExpectedTime();
+    if (Math.abs(audio.currentTime - expectedTime) > 1.5) audio.currentTime = expectedTime;
+  }, [playback.currentTime, playback.updatedAt, isAudioSource]);
 
   // Periodic local playhead update & visualizer loop
   useEffect(() => {
@@ -245,6 +287,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   // Safe helper to apply volume & mute to YouTube IFrame player without crashing if player is initializing
   const applyPlayerAudio = useCallback((targetVolume: number, muted: boolean) => {
+    if (isAudioSource && audioRef.current) {
+      audioRef.current.volume = muted ? 0 : targetVolume / 100;
+      return;
+    }
     const player = playerRef.current;
     if (!player) return;
     try {
@@ -263,7 +309,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     } catch (err) {
       console.warn('YouTube audio state update deferred or handled:', err);
     }
-  }, []);
+  }, [isAudioSource]);
 
   // When player becomes ready, ensure current volume & mute settings are applied
   useEffect(() => {
@@ -307,18 +353,49 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   // Play / Pause toggle
   const handlePlayPause = () => {
     if (!hasBaton) {
-      if (onClaimBaton && (isSoloMember || !batonOwnerName)) {
-        onClaimBaton();
-      }
+      if (batonOwnerName && onRequestBaton) onRequestBaton();
+      else if (onClaimBaton) onClaimBaton();
       return;
     }
     const nextIsPlaying = !playback.isPlaying;
     const curr = playerRef.current?.getCurrentTime?.() || localCurrentTime;
+    try {
+      if (isAudioSource) {
+        if (nextIsPlaying) audioRef.current?.play();
+        else audioRef.current?.pause();
+      } else if (nextIsPlaying) {
+        playerRef.current?.playVideo?.();
+      } else {
+        playerRef.current?.pauseVideo?.();
+      }
+    } catch (err) {
+      console.warn('Direct YouTube playback command handled:', err);
+    }
     onPlaybackUpdate({
       isPlaying: nextIsPlaying,
       currentTime: curr,
       updatedAt: Date.now(),
     });
+    if (nextIsPlaying && !playerReady) {
+      setAudioUnlocked(false);
+    }
+  };
+
+  const unlockAudio = () => {
+    try {
+      if (isAudioSource) audioRef.current?.play();
+      else playerRef.current?.playVideo?.();
+      setAudioUnlocked(true);
+      if (hasBaton && !playback.isPlaying) {
+        onPlaybackUpdate({
+          isPlaying: true,
+          currentTime: isAudioSource ? audioRef.current?.currentTime || localCurrentTime : playerRef.current?.getCurrentTime?.() || localCurrentTime,
+          updatedAt: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.warn('Audio unlock handled:', err);
+    }
   };
 
   // Seek handler (Baton holder only)
@@ -357,9 +434,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       />
 
       {/* Hidden YouTube IFrame container for synchronous audio playback */}
-      <div className="absolute opacity-0 pointer-events-none w-1 h-1 overflow-hidden">
-        <div id="youtube-player-element" />
+      <div className="relative w-full aspect-video rounded-2xl overflow-hidden mb-4 bg-black sm:absolute sm:opacity-0 sm:pointer-events-none sm:w-1 sm:h-1 sm:mb-0">
+        <div id="youtube-player-element" className="w-full h-full" />
       </div>
+      {isAudioSource && <audio ref={audioRef} controls={isMobileViewport} className="w-full mb-4" onLoadedMetadata={(event) => onPlaybackUpdate({ duration: event.currentTarget.duration })} onTimeUpdate={(event) => { setLocalCurrentTime(event.currentTarget.currentTime); if (hasBaton) onPlaybackUpdate({ currentTime: event.currentTarget.currentTime, updatedAt: Date.now() }); }} onEnded={() => hasBaton && onNextTrack?.()} />}
 
       {/* Synchronized Stream Badge */}
       <div className="flex items-center justify-between mb-4">
@@ -387,6 +465,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           )}
         </div>
       </div>
+
+      {currentSong && !audioUnlocked && (
+        <button
+          onClick={unlockAudio}
+          className="w-full mb-4 px-4 py-3 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 font-bold text-sm cursor-pointer"
+        >
+          Tap to enable audio and play on this device
+        </button>
+      )}
+
+      {youtubeError && (
+        <div className="w-full mb-4 px-4 py-3 rounded-2xl bg-rose-500/10 border border-rose-400/30 text-rose-200 text-sm">
+          YouTube could not embed this video on this device. Try another catalog track or open the video directly on YouTube.
+        </div>
+      )}
 
       {/* Main Vinyl & Track Presentation */}
       <div className="flex flex-col sm:flex-row items-center gap-6 my-3">
@@ -495,12 +588,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <button
               id="start-playback-button"
               onClick={handlePlayPause}
-              disabled={!hasBaton && !(onClaimBaton && (isSoloMember || !batonOwnerName))}
-              title="Start Queue Playback"
-              className="px-5 py-3 rounded-full bg-white text-black font-bold flex items-center gap-2 hover:scale-105 transition shadow-lg cursor-pointer"
+              title={hasBaton ? 'Start Queue Playback' : batonOwnerName ? 'Request the baton' : 'Claim the open baton'}
+              className={`px-5 py-3 rounded-full font-bold flex items-center gap-2 hover:scale-105 transition shadow-lg cursor-pointer ${hasBaton ? 'bg-white text-black' : 'bg-purple-600 text-white'}`}
             >
-              <Play className="w-5 h-5 fill-current" />
-              <span>Start Queue</span>
+              {hasBaton ? <Play className="w-5 h-5 fill-current" /> : <Hand className="w-5 h-5" />}
+              <span>{hasBaton ? 'Start Queue' : batonOwnerName ? 'Request Baton' : 'Claim Baton'}</span>
             </button>
           ) : (
             <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-emerald-300 text-xs font-semibold">

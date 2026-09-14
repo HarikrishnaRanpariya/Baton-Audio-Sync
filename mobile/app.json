@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Baton Audio Sync",
+    "owner": "hariranpariyas-team",
+    "slug": "react-example",
+    "icon": "./assets/icon.png",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.baton.audiosync",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "com.baton.audiosync",
+      "versionCode": 1,
+      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "WAKE_LOCK"]
+    },
+    "extra": {
+      "eas": {
+        "projectId": "f2ce315b-48a3-4762-a53a-a1f471c49192"
+      }
+    }
+  }
+}

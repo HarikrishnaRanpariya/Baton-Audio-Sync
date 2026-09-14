@@ -15,6 +15,8 @@ export interface SongItem {
   duration: number; // in seconds
   addedBy: string;
   addedByName: string;
+  sourceUrl?: string;
+  sourceType?: 'youtube' | 'audio-url' | 'local-file';
 }
 
 export interface BatonState {
