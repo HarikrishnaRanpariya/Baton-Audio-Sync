@@ -18,6 +18,7 @@ import {
   Volume2,
   Sliders,
   Upload,
+  Radio,
 } from 'lucide-react';
 
 interface MasterQueueViewProps {
@@ -31,7 +32,7 @@ interface MasterQueueViewProps {
   onToggleLock: () => void;
   onRemoveSong: (songId: string) => void;
   onReorderQueue: (newQueue: SongItem[]) => void;
-  onOpenMusicSearch: (initialTab?: 'search' | 'local' | 'url' | 'ai' | 'playlists') => void;
+  onOpenMusicSearch: (initialTab?: 'search' | 'local' | 'url' | 'ai' | 'playlists' | 'streams') => void;
   onSaveAsPlaylist: (title: string) => void;
   onLoadPlaylist: (playlistId: string, mode: 'replace' | 'append') => void;
   onPlaySongNow?: (song: SongItem) => void;
@@ -227,6 +228,17 @@ export const MasterQueueView: React.FC<MasterQueueViewProps> = ({
               <span className="hidden sm:inline">Save as Playlist</span>
             </button>
           )}
+
+          {/* Live Radio Broadcast to Queue */}
+          <button
+            id="queue-live-radio-button"
+            onClick={() => onOpenMusicSearch('streams')}
+            className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+          >
+            <Radio className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Live Radio</span>
+            <span className="sm:hidden">Radio</span>
+          </button>
 
           {/* Upload MP3 Button */}
           <button

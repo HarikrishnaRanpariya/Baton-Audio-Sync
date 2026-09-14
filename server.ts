@@ -767,18 +767,19 @@ async function startServer() {
           }
 
           // Update playback state
-          const { song, isPlaying, currentTime, duration } = data;
-          if (song) {
-            room.playback.currentSong = song;
+          const { song, currentSong, isPlaying, currentTime, duration } = data;
+          const activeSong = song || currentSong;
+          if (activeSong) {
+            room.playback.currentSong = activeSong;
             // Add to playlist history if not already there
             const songMatchesHistory = (p: any) => {
-              if (song.videoId && p.videoId && p.videoId.trim() === song.videoId.trim()) return true;
-              if (song.sourceUrl && p.sourceUrl && p.sourceUrl.trim() === song.sourceUrl.trim()) return true;
-              if (song.title && p.title && song.title.trim().toLowerCase() === p.title.trim().toLowerCase()) return true;
+              if (activeSong.videoId && p.videoId && p.videoId.trim() === activeSong.videoId.trim()) return true;
+              if (activeSong.sourceUrl && p.sourceUrl && p.sourceUrl.trim() === activeSong.sourceUrl.trim()) return true;
+              if (activeSong.title && p.title && activeSong.title.trim().toLowerCase() === p.title.trim().toLowerCase()) return true;
               return false;
             };
             if (!room.playlist.some(songMatchesHistory)) {
-              room.playlist.push(song);
+              room.playlist.push(activeSong);
             }
           }
           if (typeof isPlaying === 'boolean') {

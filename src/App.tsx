@@ -21,6 +21,8 @@ import { NotificationSettingsModal } from './components/NotificationSettingsModa
 import { InAppNotificationToast } from './components/InAppNotificationToast';
 import { AmbientBackground } from './components/AmbientBackground';
 import { MasterQueueView } from './components/MasterQueueView';
+import { RadioBroadcasterModal } from './components/RadioBroadcasterModal';
+import { RadioStation } from './musicCatalog';
 import {
   sendAlert,
   getNativeNotificationPermission,
@@ -73,7 +75,8 @@ export default function App() {
 
   // Modals
   const [showMusicSearch, setShowMusicSearch] = useState(false);
-  const [musicSearchTab, setMusicSearchTab] = useState<'search' | 'local' | 'url' | 'ai' | 'playlists'>('search');
+  const [musicSearchTab, setMusicSearchTab] = useState<'search' | 'local' | 'url' | 'streams' | 'ai' | 'playlists'>('search');
+  const [showRadioModal, setShowRadioModal] = useState(false);
   const [showMembersModal, setShowMembersModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showPrivacyPolicyModal, setShowPrivacyPolicyModal] = useState(false);
@@ -370,6 +373,23 @@ export default function App() {
     }
   };
 
+  const handleBroadcastRadioStation = (station: RadioStation, playImmediately: boolean) => {
+    if (!currentUser) return;
+    const song: SongItem = {
+      id: `radio-${station.id}-${Date.now()}`,
+      videoId: '',
+      title: station.name,
+      artist: `${station.genre} (Live Web Radio)`,
+      thumbnail: station.thumbnail,
+      duration: 86400,
+      addedBy: currentUser.id,
+      addedByName: currentUser.name,
+      sourceUrl: station.streamUrl,
+      sourceType: 'audio-url',
+    };
+    handleSelectSong(song, playImmediately);
+  };
+
   const handleAddMultipleToQueue = (songs: SongItem[]) => {
     songs.forEach((song) => {
       sendSocketEvent('queue:add_song', { song });
@@ -461,6 +481,7 @@ export default function App() {
           onClaimBaton={handleClaimBaton}
           onRequestBaton={handleRequestBaton}
           isSoloMember={isSoloMember}
+          onOpenRadio={() => setShowRadioModal(true)}
         />
       )}
 
@@ -504,6 +525,15 @@ export default function App() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            id="open-radio-modal-button"
+            onClick={() => setShowRadioModal(true)}
+            className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-amber-500/15"
+          >
+            <Radio className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            <span>Broadcast Live Radio</span>
+          </button>
+
           <button
             id="open-local-upload-button"
             onClick={() => {
@@ -824,6 +854,23 @@ export default function App() {
             setShowExportModal(false);
             setShowPrivacyPolicyModal(true);
           }}
+        />
+      )}
+
+      {/* Live Radio Station Broadcaster Modal */}
+      {showRadioModal && roomData && currentUser && (
+        <RadioBroadcasterModal
+          isOpen={showRadioModal}
+          onClose={() => setShowRadioModal(false)}
+          currentPlayback={roomData.playback}
+          hasBaton={hasBaton}
+          batonOwnerName={roomData.baton.currentOwnerName}
+          currentUserId={currentUser.id}
+          currentUserName={currentUser.name}
+          onBroadcastStation={handleBroadcastRadioStation}
+          onSendChatMessage={handleSendMessage}
+          onRequestBaton={handleRequestBaton}
+          onClaimBaton={handleClaimBaton}
         />
       )}
 

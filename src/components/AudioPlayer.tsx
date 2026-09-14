@@ -14,6 +14,7 @@ interface AudioPlayerProps {
   onClaimBaton?: () => void;
   onRequestBaton?: () => void;
   isSoloMember?: boolean;
+  onOpenRadio?: () => void;
 }
 
 declare global {
@@ -34,6 +35,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   onClaimBaton,
   onRequestBaton,
   isSoloMember = false,
+  onOpenRadio,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
@@ -56,6 +58,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const currentSong = playback.currentSong;
   const isAudioSource = Boolean(currentSong?.sourceUrl);
+  const isLiveRadio = Boolean(
+    currentSong?.sourceType === 'audio-url' &&
+    ((currentSong?.duration || 0) >= 3600 ||
+      currentSong?.title?.toLowerCase().includes('radio') ||
+      currentSong?.artist?.toLowerCase().includes('radio') ||
+      currentSong?.sourceUrl?.includes('stream') ||
+      currentSong?.sourceUrl?.includes('icecast'))
+  );
   const lastSourceUrlRef = useRef<string>('');
 
   // Helper: compute expected server playback timestamp accounting for network transit
@@ -189,16 +199,22 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             modestbranding: 1,
             rel: 0,
             iv_load_policy: 3,
+            origin: window.location.origin,
+            widget_referrer: window.location.href,
           },
           events: {
             onError: (event: any) => {
               console.warn('YouTube Player error code:', event.data);
               setYoutubeError(event.data);
+              // On Error 150 / 101, make video player visible so user can interact with native mobile player directly
+              if (event.data === 150 || event.data === 101) {
+                setShowVideoPlayer(true);
+              }
               // Auto-advance if video is blocked from embedding by copyright owner
               if ((event.data === 150 || event.data === 101 || event.data === 100) && hasBaton && onNextTrack) {
                 setTimeout(() => {
                   onNextTrack();
-                }, 3000);
+                }, 4000);
               }
             },
             onReady: (event: any) => {
@@ -649,6 +665,23 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Live Radio Broadcaster Modal Button */}
+          {onOpenRadio && (
+            <button
+              id="player-open-radio-btn"
+              onClick={onOpenRadio}
+              title="24/7 Live Radio & Broadcast to Group"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border transition cursor-pointer ${
+                isLiveRadio
+                  ? 'bg-amber-500 text-black border-amber-400 shadow-md shadow-amber-500/20'
+                  : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25 hover:text-white'
+              }`}
+            >
+              <Radio className={`w-3.5 h-3.5 ${isLiveRadio ? 'text-black animate-pulse' : 'text-amber-400'}`} />
+              <span>{isLiveRadio ? 'Radio (On Air)' : 'Live Radio'}</span>
+            </button>
+          )}
+
           {/* Toggle between Turntable and Video View */}
           <button
             onClick={() => setShowVideoPlayer(!showVideoPlayer)}
@@ -768,6 +801,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <span>Switch to Direct Audio Stream 🔊</span>
                 </button>
 
+                {!showVideoPlayer && (
+                  <button
+                    onClick={() => setShowVideoPlayer(true)}
+                    className="px-3.5 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/40 border border-purple-400/40 text-purple-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-purple-200" />
+                    <span>Reveal Video Player</span>
+                  </button>
+                )}
+
                 {currentSong?.videoId && (
                   <button
                     onClick={() => {
@@ -834,9 +877,23 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
         {/* Track Metadata & Equalizer Visualizer */}
         <div className="flex-1 min-w-0 text-center sm:text-left">
-          <div className="text-xs font-semibold uppercase tracking-wider text-purple-400 mb-1 flex items-center justify-center sm:justify-start gap-1.5">
-            <Sparkles className="w-3.5 h-3.5" />
-            YouTube Music Synchronized Stream
+          <div className="text-xs font-semibold uppercase tracking-wider mb-1 flex items-center justify-center sm:justify-start gap-1.5">
+            {isLiveRadio ? (
+              <span className="flex items-center gap-1.5 text-amber-400 font-bold">
+                <Radio className="w-3.5 h-3.5 animate-pulse text-amber-400" />
+                24/7 Group Live Radio Broadcast (S25 / Mobile Certified)
+              </span>
+            ) : currentSong?.sourceType === 'local-file' ? (
+              <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                Direct HTML5 Studio Audio (Room Synced)
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-purple-400 font-semibold">
+                <Sparkles className="w-3.5 h-3.5" />
+                YouTube Music Synchronized Stream
+              </span>
+            )}
           </div>
           <h2 className="text-xl md:text-2xl font-bold text-white tracking-tight truncate drop-shadow-sm">
             {currentSong?.title || 'Select a Song to Begin'}
@@ -846,7 +903,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </p>
           {currentSong?.addedByName && (
             <p className="text-xs text-white/40 mt-1">
-              Queued by: <span className="text-purple-300">{currentSong.addedByName}</span>
+              {isLiveRadio ? 'Broadcasted by: ' : 'Queued by: '}
+              <span className="text-purple-300 font-medium">{currentSong.addedByName}</span>
             </p>
           )}
 
@@ -863,37 +921,67 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       </div>
 
       {/* Interactive Track Timeline / Scrubber */}
-      <div className="mt-4 space-y-1.5">
-        <div className="relative flex items-center">
-          <input
-            id="audio-scrubber"
-            type="range"
-            min={0}
-            max={duration || 100}
-            step={0.5}
-            value={localCurrentTime}
-            disabled={!hasBaton}
-            onMouseDown={() => setIsScrubbing(true)}
-            onMouseUp={() => setIsScrubbing(false)}
-            onTouchStart={() => setIsScrubbing(true)}
-            onTouchEnd={() => setIsScrubbing(false)}
-            onChange={handleSeek}
-            className={`w-full h-2 rounded-lg appearance-none cursor-pointer bg-white/10 accent-purple-500 ${
-              !hasBaton ? 'cursor-not-allowed opacity-70' : 'hover:h-2.5 transition-all'
-            }`}
-          />
-        </div>
-
-        <div className="flex justify-between text-xs text-white/50 font-mono">
-          <span>{formatTime(localCurrentTime)}</span>
-          {!hasBaton && (
-            <span className="text-[11px] text-purple-400/80 font-sans italic">
-              Seek locked to Baton Holder
+      {isLiveRadio ? (
+        <div className="mt-4 p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-purple-500/10 to-amber-500/10 border border-amber-500/30 flex flex-wrap items-center justify-between gap-3 text-xs shadow-inner">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
             </span>
-          )}
-          <span>{formatTime(duration)}</span>
+            <span className="font-black text-amber-300 uppercase tracking-wider text-[11px]">
+              Continuous Live Group Radio
+            </span>
+            <span className="px-2 py-0.5 rounded-full bg-white/10 text-white/70 text-[10px] font-mono">
+              Infinite Stream
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-white/50 text-[11px] font-mono hidden sm:inline">
+              100% Android S25 & Mobile Compatible
+            </span>
+            {onOpenRadio && (
+              <button
+                onClick={onOpenRadio}
+                className="px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-bold transition cursor-pointer"
+              >
+                Switch Radio Station
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="mt-4 space-y-1.5">
+          <div className="relative flex items-center">
+            <input
+              id="audio-scrubber"
+              type="range"
+              min={0}
+              max={duration || 100}
+              step={0.5}
+              value={localCurrentTime}
+              disabled={!hasBaton}
+              onMouseDown={() => setIsScrubbing(true)}
+              onMouseUp={() => setIsScrubbing(false)}
+              onTouchStart={() => setIsScrubbing(true)}
+              onTouchEnd={() => setIsScrubbing(false)}
+              onChange={handleSeek}
+              className={`w-full h-2 rounded-lg appearance-none cursor-pointer bg-white/10 accent-purple-500 ${
+                !hasBaton ? 'cursor-not-allowed opacity-70' : 'hover:h-2.5 transition-all'
+              }`}
+            />
+          </div>
+
+          <div className="flex justify-between text-xs text-white/50 font-mono">
+            <span>{formatTime(localCurrentTime)}</span>
+            {!hasBaton && (
+              <span className="text-[11px] text-purple-400/80 font-sans italic">
+                Seek locked to Baton Holder
+              </span>
+            )}
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
+      )}
 
       {/* Control Buttons & Volume */}
       <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-4">
