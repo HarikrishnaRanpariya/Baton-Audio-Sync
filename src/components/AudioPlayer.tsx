@@ -519,7 +519,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setYoutubeError(null);
     if (hasBaton) {
       onPlaybackUpdate({
-        song: {
+        currentSong: {
           ...(currentSong || {
             id: `stream-${Date.now()}`,
             videoId: '',
