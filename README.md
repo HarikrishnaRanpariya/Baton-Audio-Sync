@@ -66,6 +66,33 @@ npx.cmd expo prebuild --no-install --platform android
 
 The mobile project uses Expo SDK 52 and the EAS project linked in `mobile/app.json`.
 
+## Building the Android APK with Docker (No Android Studio required)
+
+You can build the release APK on Windows using Docker without installing Android Studio or Java locally:
+
+1. Open PowerShell in the repository root:
+   ```powershell
+   cd "C:\Users\Surbhi\Hari_work\project\Baton-Audio-Sync"
+   ```
+2. Build the APK inside the container:
+   ```powershell
+   docker compose -f docker-compose.android.yml up --build
+   ```
+3. Once the build completes, the compiled APK will be automatically placed in the `./build-output/` folder on your computer:
+   ```
+   ./build-output/release/app-release.apk
+   ```
+
+## Building Locally on Windows with Gradle
+
+If you have JDK 17 and Android SDK installed on your Windows machine:
+
+```powershell
+cd "C:\Users\Surbhi\Hari_work\project\Baton-Audio-Sync\mobile\android"
+.\gradlew.bat assembleRelease
+```
+The resulting APK will be at `mobile\android\app\build\outputs\apk\release\app-release.apk`.
+
 ## Mobile Room Connection
 
 Start the WebSocket server on the host PC before opening the Android app. Keep this terminal running while using the app.

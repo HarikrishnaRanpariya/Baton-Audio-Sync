@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { SongItem, PlaylistGroup, AiPlaylistCriteria } from '../types';
 import { CURATED_TRACKS, extractYouTubeVideoId } from '../musicCatalog';
 import {
@@ -20,6 +20,13 @@ import {
   Radio,
   Clock,
   Layers,
+  Upload,
+  FileAudio,
+  PlayCircle,
+  PauseCircle,
+  CheckCircle2,
+  AlertCircle,
+  HardDrive,
 } from 'lucide-react';
 
 interface MusicSearchModalProps {
@@ -35,7 +42,7 @@ interface MusicSearchModalProps {
   currentSongId?: string;
   currentUserId: string;
   currentUserName: string;
-  initialTab?: 'search' | 'url' | 'ai' | 'playlists';
+  initialTab?: 'search' | 'local' | 'url' | 'ai' | 'playlists';
 }
 
 const MOODS = [
@@ -97,7 +104,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
   currentUserName,
   initialTab = 'search',
 }) => {
-  const [activeTab, setActiveTab] = useState<'search' | 'url' | 'ai' | 'playlists'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'search' | 'local' | 'url' | 'ai' | 'playlists'>(initialTab);
   const [query, setQuery] = useState('');
   const [customUrl, setCustomUrl] = useState('');
   const [customTitle, setCustomTitle] = useState('');
@@ -105,6 +112,38 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
   const [fileError, setFileError] = useState('');
   const [urlError, setUrlError] = useState('');
   const [addedNotification, setAddedNotification] = useState<string | null>(null);
+
+  // Local MP3 upload state
+  const [localFiles, setLocalFiles] = useState<File[]>([]);
+  const [localTitle, setLocalTitle] = useState('');
+  const [localArtist, setLocalArtist] = useState('');
+  const [localDuration, setLocalDuration] = useState<number>(210);
+  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
+  const [isLocalAudioPreviewPlaying, setIsLocalAudioPreviewPlaying] = useState(false);
+  const [isUploadingLocal, setIsUploadingLocal] = useState(false);
+  const [uploadProgressStatus, setUploadProgressStatus] = useState<string | null>(null);
+  const [selectedPlaylistForLocal, setSelectedPlaylistForLocal] = useState<string>('queue');
+  const [newPlaylistTitleForLocal, setNewPlaylistTitleForLocal] = useState<string>('');
+  const localPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  // Clean up object URLs on unmount or file change
+  useEffect(() => {
+    return () => {
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+      }
+      if (localPreviewAudioRef.current) {
+        localPreviewAudioRef.current.pause();
+      }
+    };
+  }, [localPreviewUrl]);
 
   // AI Generator state
   const [aiMood, setAiMood] = useState('Chill & Relaxed');
@@ -207,46 +246,212 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
     setCustomArtist('');
   };
 
-  const handleLocalFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const isAudioFile = file.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|oga|flac|webm)$/i.test(file.name);
-    if (!isAudioFile) {
-      setFileError('Choose an audio file such as MP3, M4A, WAV, or OGG.');
+  // Helper to extract audio duration via browser audio decoder
+  const inspectAudioFile = (file: File): Promise<{ duration: number; previewUrl: string }> => {
+    return new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const tempAudio = new Audio();
+        tempAudio.preload = 'metadata';
+        tempAudio.src = url;
+        tempAudio.onloadedmetadata = () => {
+          const d = Math.round(tempAudio.duration);
+          resolve({ duration: Number.isFinite(d) && d > 0 ? d : 210, previewUrl: url });
+        };
+        tempAudio.onerror = () => {
+          resolve({ duration: 210, previewUrl: url });
+        };
+      } catch {
+        resolve({ duration: 210, previewUrl: '' });
+      }
+    });
+  };
+
+  const handleSelectLocalFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setFileError('');
+    const rawFiles = Array.from(files);
+    const audioFiles = rawFiles.filter(
+      (f) => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|oga|flac|webm)$/i.test(f.name)
+    );
+
+    if (audioFiles.length === 0) {
+      setFileError('Please select valid audio files (MP3, WAV, M4A, OGG, FLAC, AAC).');
       return;
     }
+
+    if (localPreviewUrl) {
+      URL.revokeObjectURL(localPreviewUrl);
+      setLocalPreviewUrl(null);
+    }
+    if (localPreviewAudioRef.current) {
+      localPreviewAudioRef.current.pause();
+    }
+    setIsLocalAudioPreviewPlaying(false);
+
+    setLocalFiles(audioFiles);
+
+    if (audioFiles.length === 1) {
+      const single = audioFiles[0];
+      const cleanName = single.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+      setLocalTitle(cleanName);
+      setLocalArtist(currentUserName ? `${currentUserName}'s Upload` : 'Local Audio');
+      const { duration, previewUrl } = await inspectAudioFile(single);
+      setLocalDuration(duration);
+      setLocalPreviewUrl(previewUrl);
+    } else {
+      setLocalTitle(`${audioFiles.length} Audio Tracks`);
+      setLocalArtist(currentUserName || 'Batch Upload');
+      const { previewUrl } = await inspectAudioFile(audioFiles[0]);
+      setLocalPreviewUrl(previewUrl);
+    }
+  };
+
+  const uploadSingleAudioFile = async (
+    file: File,
+    title: string,
+    artist: string,
+    duration: number
+  ): Promise<SongItem> => {
     const formData = new FormData();
     formData.append('file', file);
-    setFileError('Uploading audio file...');
-    let upload: { url: string; originalName: string };
-    try {
-      const response = await fetch('/api/audio-upload', { method: 'POST', body: formData });
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => null);
-        throw new Error(errorBody?.error || 'Upload failed');
-      }
-      upload = await response.json();
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : 'Could not upload this file to the room server.');
-      return;
+    const response = await fetch('/api/audio-upload', { method: 'POST', body: formData });
+    if (!response.ok) {
+      const err = await response.json().catch(() => null);
+      throw new Error(err?.error || `Upload failed for ${file.name}`);
     }
-    const song: SongItem = {
-      id: `local-${Date.now()}`,
+    const data = await response.json();
+    return {
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       videoId: '',
-      sourceUrl: upload.url,
+      sourceUrl: data.url,
       sourceType: 'audio-url',
-      title: upload.originalName.replace(/\.[^.]+$/, ''),
-      artist: 'Uploaded room track',
+      title: title.trim() || data.originalName.replace(/\.[^.]+$/, ''),
+      artist: artist.trim() || 'Uploaded Track',
       thumbnail: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
-      duration: 240,
+      duration: duration || 210,
       addedBy: currentUserId,
       addedByName: currentUserName,
     };
-    onSelectSong(song, false);
+  };
+
+  const handlePlayLocalNow = async () => {
+    if (localFiles.length === 0) return;
+    setIsUploadingLocal(true);
+    setUploadProgressStatus('Uploading MP3 to room server...');
     setFileError('');
-    setAddedNotification(`Added ${song.title} for the room`);
-    setTimeout(() => setAddedNotification(null), 2500);
-    event.target.value = '';
+
+    try {
+      const file = localFiles[0];
+      const song = await uploadSingleAudioFile(file, localTitle, localArtist, localDuration);
+      onSelectSong(song, true);
+      setAddedNotification(`Playing "${song.title}" for the room!`);
+      setTimeout(() => {
+        onClose();
+      }, 500);
+    } catch (err: any) {
+      setFileError(err.message || 'Could not upload audio file.');
+    } finally {
+      setIsUploadingLocal(false);
+      setUploadProgressStatus(null);
+    }
+  };
+
+  const handleAddLocalToQueue = async () => {
+    if (localFiles.length === 0) return;
+    setIsUploadingLocal(true);
+    setFileError('');
+
+    try {
+      if (localFiles.length === 1) {
+        setUploadProgressStatus('Uploading MP3 to room server...');
+        const file = localFiles[0];
+        const song = await uploadSingleAudioFile(file, localTitle, localArtist, localDuration);
+        onSelectSong(song, false);
+        setAddedNotification(`Added "${song.title}" to Master Queue`);
+      } else {
+        // Multi-file batch upload
+        const uploadedSongs: SongItem[] = [];
+        for (let i = 0; i < localFiles.length; i++) {
+          const file = localFiles[i];
+          setUploadProgressStatus(`Uploading track ${i + 1} of ${localFiles.length}: ${file.name}...`);
+          const song = await uploadSingleAudioFile(
+            file,
+            file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
+            localArtist || 'Batch Upload',
+            210
+          );
+          uploadedSongs.push(song);
+        }
+        if (onAddMultipleToQueue) {
+          onAddMultipleToQueue(uploadedSongs);
+        } else {
+          for (const s of uploadedSongs) {
+            onSelectSong(s, false);
+          }
+        }
+        setAddedNotification(`Added ${uploadedSongs.length} local tracks to Master Queue`);
+      }
+
+      setTimeout(() => setAddedNotification(null), 3000);
+      setLocalFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      setFileError(err.message || 'Could not upload audio files.');
+    } finally {
+      setIsUploadingLocal(false);
+      setUploadProgressStatus(null);
+    }
+  };
+
+  const handleSaveLocalToPlaylist = async () => {
+    if (localFiles.length === 0) return;
+    setIsUploadingLocal(true);
+    setFileError('');
+
+    try {
+      const uploadedSongs: SongItem[] = [];
+      for (let i = 0; i < localFiles.length; i++) {
+        const file = localFiles[i];
+        setUploadProgressStatus(`Uploading track ${i + 1} of ${localFiles.length}...`);
+        const song = await uploadSingleAudioFile(
+          file,
+          localFiles.length === 1 ? localTitle : file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
+          localArtist || 'Local Music',
+          localFiles.length === 1 ? localDuration : 210
+        );
+        uploadedSongs.push(song);
+      }
+
+      const playlistTitle =
+        selectedPlaylistForLocal === 'new'
+          ? (newPlaylistTitleForLocal.trim() || 'My Local MP3s')
+          : (playlists.find((p) => p.id === selectedPlaylistForLocal)?.title || 'Local Audio Playlist');
+
+      if (onSaveAsPlaylist) {
+        onSaveAsPlaylist(playlistTitle, uploadedSongs);
+        setAddedNotification(`Saved ${uploadedSongs.length} tracks to playlist "${playlistTitle}"!`);
+        setTimeout(() => setAddedNotification(null), 3000);
+      }
+      setLocalFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      setFileError(err.message || 'Could not save tracks to playlist.');
+    } finally {
+      setIsUploadingLocal(false);
+      setUploadProgressStatus(null);
+    }
+  };
+
+  const togglePreviewPlayback = () => {
+    const audio = localPreviewAudioRef.current;
+    if (!audio) return;
+    if (isLocalAudioPreviewPlaying) {
+      audio.pause();
+      setIsLocalAudioPreviewPlaying(false);
+    } else {
+      audio.play().then(() => setIsLocalAudioPreviewPlaying(true)).catch(() => setIsLocalAudioPreviewPlaying(false));
+    }
   };
 
   // Trigger AI generation
@@ -372,7 +577,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
         )}
 
         {/* Navigation Tabs */}
-        <div className="grid grid-cols-4 gap-1.5 mt-4 p-1.5 bg-white/5 border border-white/10 rounded-2xl">
+        <div className="grid grid-cols-5 gap-1 mt-4 p-1.5 bg-white/5 border border-white/10 rounded-2xl">
           <button
             id="tab-search-catalog"
             onClick={() => setActiveTab('search')}
@@ -383,8 +588,21 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
             }`}
           >
             <Search className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Search Catalog</span>
+            <span className="hidden sm:inline">Catalog</span>
             <span className="sm:hidden">Catalog</span>
+          </button>
+          <button
+            id="tab-upload-local"
+            onClick={() => setActiveTab('local')}
+            className={`py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeTab === 'local'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 font-bold'
+                : 'text-emerald-400/80 hover:text-emerald-300'
+            }`}
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Upload MP3</span>
+            <span className="sm:hidden">MP3</span>
           </button>
           <button
             id="tab-paste-url"
@@ -409,7 +627,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
             }`}
           >
             <Wand2 className="w-3.5 h-3.5 text-pink-400" />
-            <span className="hidden sm:inline">AI Playlist</span>
+            <span className="hidden sm:inline">AI DJ</span>
             <span className="sm:hidden">AI</span>
           </button>
           <button
@@ -498,7 +716,245 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: Custom YouTube URL */}
+        {/* TAB 2: Dedicated Local Machine MP3 / Audio File Upload */}
+        {/* ========================================================================= */}
+        {activeTab === 'local' && (
+          <div className="flex-1 overflow-y-auto mt-4 space-y-4 pr-1">
+            {/* Header info banner */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/30 via-teal-950/30 to-purple-950/20 border border-emerald-500/30">
+              <div className="flex items-center gap-2 text-emerald-300 text-xs font-bold uppercase tracking-wider mb-1">
+                <HardDrive className="w-4 h-4 text-emerald-400" />
+                Local Machine Audio Upload & Playback
+              </div>
+              <p className="text-xs text-white/70 leading-relaxed">
+                Add MP3, WAV, M4A, OGG, or FLAC files directly from your computer. Uploaded tracks are synchronized across all devices in the room, queued into the Master Playlist, or saved into custom groups!
+              </p>
+            </div>
+
+            {/* Dropzone & File Selector */}
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.dataTransfer.files) {
+                  handleSelectLocalFiles(e.dataTransfer.files);
+                }
+              }}
+              className="p-6 border-2 border-dashed border-emerald-500/40 hover:border-emerald-400 bg-emerald-950/15 hover:bg-emerald-950/25 rounded-2xl flex flex-col items-center justify-center text-center cursor-pointer transition group"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.flac,.webm"
+                onChange={(e) => handleSelectLocalFiles(e.target.files)}
+                className="hidden"
+              />
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-3 group-hover:scale-110 transition">
+                <Upload className="w-6 h-6" />
+              </div>
+              <div className="text-sm font-bold text-white mb-1">
+                {localFiles.length === 0 ? 'Choose or Drag MP3 / Audio Files' : `${localFiles.length} file(s) selected`}
+              </div>
+              <p className="text-xs text-white/50 max-w-sm">
+                Supports MP3, WAV, M4A, OGG, FLAC. You can select one song or multiple tracks at once.
+              </p>
+            </div>
+
+            {fileError && (
+              <div className="p-3 bg-pink-500/20 border border-pink-500/40 rounded-xl text-xs text-pink-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-pink-400 shrink-0" />
+                <span>{fileError}</span>
+              </div>
+            )}
+
+            {/* Uploading Status Banner */}
+            {isUploadingLocal && (
+              <div className="p-3.5 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-xs text-emerald-200 flex items-center gap-3 animate-pulse">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-300 shrink-0" />
+                <span className="font-medium">{uploadProgressStatus || 'Uploading audio file...'}</span>
+              </div>
+            )}
+
+            {/* Selected File Details & Editor */}
+            {localFiles.length > 0 && !isUploadingLocal && (
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-purple-300">
+                      <FileAudio className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold text-white truncate max-w-xs sm:max-w-md">
+                        {localFiles.length === 1 ? localFiles[0].name : `${localFiles.length} Selected Songs`}
+                      </div>
+                      <div className="text-[11px] text-white/40 flex items-center gap-2 mt-0.5">
+                        <span>{(localFiles.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1)} MB total</span>
+                        {localFiles.length === 1 && (
+                          <>
+                            <span>•</span>
+                            <span>{Math.floor(localDuration / 60)}:{(localDuration % 60).toString().padStart(2, '0')}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Preview Player button for single file */}
+                  {localPreviewUrl && (
+                    <button
+                      type="button"
+                      onClick={togglePreviewPlayback}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white flex items-center gap-1.5 transition cursor-pointer border border-white/10"
+                    >
+                      {isLocalAudioPreviewPlaying ? (
+                        <>
+                          <PauseCircle className="w-4 h-4 text-emerald-400" />
+                          <span>Pause Preview</span>
+                        </>
+                      ) : (
+                        <>
+                          <PlayCircle className="w-4 h-4 text-purple-400" />
+                          <span>Preview Audio</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Hidden HTML5 audio for in-modal preview */}
+                {localPreviewUrl && (
+                  <audio
+                    ref={localPreviewAudioRef}
+                    src={localPreviewUrl}
+                    onEnded={() => setIsLocalAudioPreviewPlaying(false)}
+                    onError={() => setIsLocalAudioPreviewPlaying(false)}
+                    className="hidden"
+                  />
+                )}
+
+                {/* Metadata Fields for single song */}
+                {localFiles.length === 1 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-white/70 mb-1">
+                        Song / Track Title
+                      </label>
+                      <input
+                        type="text"
+                        value={localTitle}
+                        onChange={(e) => setLocalTitle(e.target.value)}
+                        placeholder="e.g. My Favorite Song"
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:border-emerald-500 transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-white/70 mb-1">
+                        Artist / Origin
+                      </label>
+                      <input
+                        type="text"
+                        value={localArtist}
+                        onChange={(e) => setLocalArtist(e.target.value)}
+                        placeholder="e.g. Artist name or your name"
+                        className="w-full bg-black/40 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-white/40 focus:outline-none focus:border-emerald-500 transition"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Multi-file track list */}
+                {localFiles.length > 1 && (
+                  <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                    {localFiles.map((f, idx) => (
+                      <div
+                        key={f.name + idx}
+                        className="flex items-center justify-between p-2 rounded-xl bg-black/30 border border-white/5 text-xs text-white/80"
+                      >
+                        <span className="truncate max-w-[240px]">{idx + 1}. {f.name}</span>
+                        <span className="text-white/40 shrink-0">{(f.size / (1024 * 1024)).toFixed(1)} MB</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Target action selector (Queue vs Playlist) */}
+                <div className="pt-2 border-t border-white/10">
+                  <label className="block text-xs font-medium text-white/60 mb-2">
+                    Also Save into a Playlist (Optional):
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <select
+                      value={selectedPlaylistForLocal}
+                      onChange={(e) => setSelectedPlaylistForLocal(e.target.value)}
+                      className="bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="queue">Don't save to playlist (Queue only)</option>
+                      <option value="new">+ Create New Group Playlist...</option>
+                      {playlists.map((pl) => (
+                        <option key={pl.id} value={pl.id}>
+                          Playlist: {pl.title} ({pl.songs.length} tracks)
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedPlaylistForLocal === 'new' && (
+                      <input
+                        type="text"
+                        value={newPlaylistTitleForLocal}
+                        onChange={(e) => setNewPlaylistTitleForLocal(e.target.value)}
+                        placeholder="New Playlist Name..."
+                        className="bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-white/40 focus:outline-none focus:border-emerald-500 grow"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* Primary Action Buttons */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+                  {/* Play Now Button */}
+                  <button
+                    type="button"
+                    onClick={handlePlayLocalNow}
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-600/30 cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>Play Now for Room</span>
+                  </button>
+
+                  {/* Add to Queue Button */}
+                  <button
+                    type="button"
+                    onClick={handleAddLocalToQueue}
+                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-bold py-3 rounded-2xl flex items-center justify-center gap-2 transition shadow-lg shadow-purple-600/30 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{localFiles.length > 1 ? `Add All (${localFiles.length}) to Queue` : 'Add to Master Queue'}</span>
+                  </button>
+                </div>
+
+                {selectedPlaylistForLocal !== 'queue' && (
+                  <button
+                    type="button"
+                    onClick={handleSaveLocalToPlaylist}
+                    className="w-full bg-white/10 hover:bg-white/15 text-white font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer border border-white/10 text-xs"
+                  >
+                    <BookmarkPlus className="w-4 h-4 text-emerald-400" />
+                    <span>Save Track(s) into Playlist</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 3: Custom YouTube URL */}
         {/* ========================================================================= */}
         {activeTab === 'url' && (
           <form onSubmit={handleCustomUrlSubmit} className="mt-4 space-y-4">
@@ -509,22 +965,21 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
               <input
                 id="custom-youtube-url-input"
                 type="text"
-                required
                 value={customUrl}
                 onChange={(e) => setCustomUrl(e.target.value)}
                 placeholder="https://music.youtube.com/watch?v=... or https://youtu.be/..."
                 className="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-white/40 focus:outline-none focus:border-purple-500 transition"
               />
-              <p className="text-[11px] text-white/40 mt-1">
-                YouTube links use the embedded player. Direct audio URLs are played with the browser audio engine.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
-              <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-2">Audio file on this device</label>
-              <input type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.flac,.webm" onChange={handleLocalFile} className="w-full text-xs text-white/70 file:mr-3 file:rounded-xl file:border-0 file:bg-purple-600 file:px-3 file:py-2 file:text-white file:font-semibold" />
-              <p className="text-[11px] text-white/40 mt-2">Local files play only on this device. They are not uploaded or shared with the room.</p>
-              {fileError && <p className="text-xs text-pink-300 mt-2">{fileError}</p>}
+              <div className="flex items-center justify-between text-[11px] text-white/40 mt-1.5">
+                <span>YouTube links use the synchronized playback engine.</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('local')}
+                  className="text-emerald-400 hover:text-emerald-300 font-semibold underline cursor-pointer"
+                >
+                  Upload local MP3 instead →
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

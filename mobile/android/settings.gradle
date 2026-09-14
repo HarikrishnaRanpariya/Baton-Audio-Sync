@@ -21,7 +21,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
   }
 }
 
-rootProject.name = 'Baton Audio Sync'
+rootProject.name = 'BatonAudioSync'
 
 dependencyResolutionManagement {
   versionCatalogs {

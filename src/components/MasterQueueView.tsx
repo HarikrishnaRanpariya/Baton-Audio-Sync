@@ -17,6 +17,7 @@ import {
   Play,
   Volume2,
   Sliders,
+  Upload,
 } from 'lucide-react';
 
 interface MasterQueueViewProps {
@@ -30,7 +31,7 @@ interface MasterQueueViewProps {
   onToggleLock: () => void;
   onRemoveSong: (songId: string) => void;
   onReorderQueue: (newQueue: SongItem[]) => void;
-  onOpenMusicSearch: (initialTab?: 'search' | 'url' | 'ai' | 'playlists') => void;
+  onOpenMusicSearch: (initialTab?: 'search' | 'local' | 'url' | 'ai' | 'playlists') => void;
   onSaveAsPlaylist: (title: string) => void;
   onLoadPlaylist: (playlistId: string, mode: 'replace' | 'append') => void;
   onPlaySongNow?: (song: SongItem) => void;
@@ -227,6 +228,17 @@ export const MasterQueueView: React.FC<MasterQueueViewProps> = ({
             </button>
           )}
 
+          {/* Upload MP3 Button */}
+          <button
+            id="upload-mp3-to-queue-button"
+            onClick={() => onOpenMusicSearch('local')}
+            className="px-3 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+          >
+            <Upload className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">Upload MP3</span>
+            <span className="sm:hidden">MP3</span>
+          </button>
+
           {/* Add Songs Button */}
           <button
             id="add-song-to-queue-button"
@@ -301,7 +313,14 @@ export const MasterQueueView: React.FC<MasterQueueViewProps> = ({
             <p className="text-xs text-white/40 mt-1 max-w-sm mx-auto">
               Any group member can add songs or use the AI Playlist generator to queue up tunes!
             </p>
-            <div className="flex items-center justify-center gap-2 mt-4">
+            <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
+              <button
+                onClick={() => onOpenMusicSearch('local')}
+                className="px-4 py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/40 border border-emerald-500/40 text-emerald-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-emerald-300" />
+                Upload MP3 / Audio
+              </button>
               <button
                 onClick={() => onOpenMusicSearch('search')}
                 className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition cursor-pointer"
@@ -375,11 +394,11 @@ export const MasterQueueView: React.FC<MasterQueueViewProps> = ({
                       </div>
                     )}
 
-                    {/* Quick Play (Baton holder) */}
-                    {hasBaton && onPlaySongNow && (
+                    {/* Quick Play */}
+                    {onPlaySongNow && (
                       <button
                         onClick={() => onPlaySongNow(song)}
-                        title="Play right now"
+                        title={hasBaton ? "Play right now" : "Take baton & play right now"}
                         className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition cursor-pointer"
                       >
                         <Play className="w-3.5 h-3.5" />

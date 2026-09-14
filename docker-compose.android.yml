@@ -5,4 +5,4 @@ services:
       dockerfile: Dockerfile.android
     volumes:
       # Mounts a folder on your Windows machine to receive the output APK
-      - ./build-output:/app/android/app/build/outputs/apk
+      - ./build-output:/app/mobile/android/app/build/outputs/apk

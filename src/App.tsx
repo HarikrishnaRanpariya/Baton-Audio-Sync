@@ -40,6 +40,7 @@ import {
   ShieldAlert,
   Search,
   Bell,
+  Upload,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -72,7 +73,7 @@ export default function App() {
 
   // Modals
   const [showMusicSearch, setShowMusicSearch] = useState(false);
-  const [musicSearchTab, setMusicSearchTab] = useState<'search' | 'url' | 'ai' | 'playlists'>('search');
+  const [musicSearchTab, setMusicSearchTab] = useState<'search' | 'local' | 'url' | 'ai' | 'playlists'>('search');
   const [showMembersModal, setShowMembersModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showPrivacyPolicyModal, setShowPrivacyPolicyModal] = useState(false);
@@ -347,7 +348,13 @@ export default function App() {
 
   // Song selection & Queue operations
   const handleSelectSong = (song: SongItem, playImmediately: boolean) => {
-    if (playImmediately && hasBaton) {
+    const isBatonUnclaimed = !roomData?.baton.currentOwnerId;
+    const canTakePlayback = hasBaton || isBatonUnclaimed || isSoloMember;
+
+    if (playImmediately && canTakePlayback) {
+      if (!hasBaton) {
+        sendSocketEvent('baton:claim');
+      }
       sendSocketEvent('playback:update', {
         song,
         isPlaying: true,
@@ -357,6 +364,9 @@ export default function App() {
     } else {
       // Send to server to append to Master Queue with duplicate verification
       sendSocketEvent('queue:add_song', { song });
+      if (playImmediately && !canTakePlayback) {
+        sendSocketEvent('baton:request');
+      }
     }
   };
 
@@ -493,7 +503,19 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            id="open-local-upload-button"
+            onClick={() => {
+              setMusicSearchTab('local');
+              setShowMusicSearch(true);
+            }}
+            className="px-3.5 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/15"
+          >
+            <Upload className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Upload MP3</span>
+          </button>
+
           <button
             id="open-ai-generator-button"
             onClick={() => {

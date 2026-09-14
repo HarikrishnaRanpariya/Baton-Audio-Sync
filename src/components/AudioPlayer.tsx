@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PlaybackState, SongItem } from '../types';
-import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand, AlertCircle, Tv } from 'lucide-react';
 import { PersonalVolumeMixer } from './PersonalVolumeMixer';
 
 interface AudioPlayerProps {
@@ -48,6 +48,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [youtubeError, setYoutubeError] = useState<number | null>(null);
+  const [showVideoPlayer, setShowVideoPlayer] = useState(false);
   const [isMobileViewport] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 639px)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
@@ -55,74 +56,197 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const currentSong = playback.currentSong;
   const isAudioSource = Boolean(currentSong?.sourceUrl);
+  const lastSourceUrlRef = useRef<string>('');
 
-  // Initialize YouTube Iframe Player
+  // Helper: compute expected server playback timestamp accounting for network transit
+  const calculateExpectedTime = useCallback(() => {
+    if (!playback.isPlaying) {
+      return playback.currentTime;
+    }
+    const elapsed = (Date.now() - playback.updatedAt) / 1000;
+    const computed = playback.currentTime + elapsed;
+    return Math.min(computed, playback.duration || 3600);
+  }, [playback.isPlaying, playback.currentTime, playback.updatedAt, playback.duration]);
+
+  // Direct Audio Unlocker for Mobile Autoplay Policy (Samsung S25 Ultra / Android Chrome / WebViews)
+  const unlockAudio = useCallback(async () => {
+    // 1. Resume Web AudioContext
+    try {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtxClass) {
+        const ctx = new AudioCtxClass();
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+        // Emit silent pulse to bless context
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0.0001;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(0);
+        osc.stop(0.01);
+      }
+    } catch (e) {
+      console.warn('AudioContext resume handled:', e);
+    }
+
+    // 2. Unlock HTML5 Audio Element
+    if (audioRef.current) {
+      try {
+        audioRef.current.muted = false;
+        audioRef.current.volume = isMuted ? 0 : volume / 100;
+        if (isAudioSource) {
+          const expected = calculateExpectedTime();
+          if (Math.abs(audioRef.current.currentTime - expected) > 1.5) {
+            audioRef.current.currentTime = expected;
+          }
+          await audioRef.current.play();
+        }
+      } catch (e) {
+        console.warn('HTML5 Audio unlock handled:', e);
+      }
+    }
+
+    // 3. Unlock YouTube Iframe Player
+    if (playerRef.current) {
+      try {
+        if (typeof playerRef.current.unMute === 'function' && !isMuted) {
+          playerRef.current.unMute();
+          playerRef.current.setVolume(volume);
+        }
+        if (!isAudioSource) {
+          const expected = calculateExpectedTime();
+          if (typeof playerRef.current.seekTo === 'function') {
+            playerRef.current.seekTo(expected, true);
+          }
+          if (typeof playerRef.current.playVideo === 'function') {
+            playerRef.current.playVideo();
+          }
+        }
+      } catch (e) {
+        console.warn('YouTube unlock handled:', e);
+      }
+    }
+
+    setAudioUnlocked(true);
+
+    if (hasBaton && !playback.isPlaying) {
+      onPlaybackUpdate({
+        isPlaying: true,
+        currentTime: isAudioSource
+          ? audioRef.current?.currentTime || localCurrentTime
+          : playerRef.current?.getCurrentTime?.() || localCurrentTime,
+        updatedAt: Date.now(),
+      });
+    }
+  }, [calculateExpectedTime, isAudioSource, isMuted, volume, hasBaton, playback.isPlaying, localCurrentTime, onPlaybackUpdate]);
+
+  // Global One-Time User-Gesture Listener:
+  // As soon as the user touches/clicks anywhere on the S25 Ultra, audio permissions are unlocked!
   useEffect(() => {
-    if (isAudioSource) return;
+    if (audioUnlocked) return;
+
+    const handleFirstGesture = () => {
+      unlockAudio();
+    };
+
+    window.addEventListener('touchstart', handleFirstGesture, { passive: true });
+    window.addEventListener('touchend', handleFirstGesture, { passive: true });
+    window.addEventListener('pointerdown', handleFirstGesture, { passive: true });
+    window.addEventListener('click', handleFirstGesture, { passive: true });
+
+    return () => {
+      window.removeEventListener('touchstart', handleFirstGesture);
+      window.removeEventListener('touchend', handleFirstGesture);
+      window.removeEventListener('pointerdown', handleFirstGesture);
+      window.removeEventListener('click', handleFirstGesture);
+    };
+  }, [audioUnlocked, unlockAudio]);
+
+  // Initialize YouTube Iframe Player (Universal Mobile + Desktop Compatible)
+  useEffect(() => {
     let checkInterval: any = null;
 
     const initPlayer = () => {
       if (!window.YT || !window.YT.Player) return;
       if (playerRef.current) return;
+      const targetElement = document.getElementById('youtube-player-element');
+      if (!targetElement) return;
 
-      playerRef.current = new window.YT.Player('youtube-player-element', {
-        height: '100%',
-        width: '100%',
-        host: 'https://www.youtube-nocookie.com',
-        videoId: currentSong ? currentSong.videoId : '4NRXx6U8ABQ',
-        playerVars: {
-          autoplay: playback.isPlaying ? 1 : 0,
-          controls: isMobileViewport ? 1 : 0,
-          playsinline: 1,
-          enablejsapi: 1,
-          disablekb: 1,
-          fs: 0,
-          modestbranding: 1,
-          rel: 0,
-          origin: window.location.origin,
-        },
-        events: {
-          onError: (event: any) => {
-            setYoutubeError(event.data);
-            setAudioUnlocked(false);
+      try {
+        playerRef.current = new window.YT.Player('youtube-player-element', {
+          height: '100%',
+          width: '100%',
+          videoId: currentSong?.videoId ? currentSong.videoId : '4NRXx6U8ABQ',
+          playerVars: {
+            autoplay: playback.isPlaying && !isAudioSource ? 1 : 0,
+            controls: 1, // Native controls permit 1-tap playback if autoplay is restricted
+            playsinline: 1, // Crucial for mobile browser & WebView inline playback
+            enablejsapi: 1,
+            disablekb: 0,
+            fs: 1,
+            modestbranding: 1,
+            rel: 0,
+            iv_load_policy: 3,
           },
-          onReady: (event: any) => {
-            setYoutubeError(null);
-            setPlayerReady(true);
-            try {
-              if (isMuted) {
-                if (typeof event.target?.mute === 'function') {
-                  event.target.mute();
-                }
-              } else {
-                if (typeof event.target?.unMute === 'function') {
-                  event.target.unMute();
-                }
-                if (typeof event.target?.setVolume === 'function') {
-                  event.target.setVolume(volume);
-                }
+          events: {
+            onError: (event: any) => {
+              console.warn('YouTube Player error code:', event.data);
+              setYoutubeError(event.data);
+              // Auto-advance if video is blocked from embedding by copyright owner
+              if ((event.data === 150 || event.data === 101 || event.data === 100) && hasBaton && onNextTrack) {
+                setTimeout(() => {
+                  onNextTrack();
+                }, 3000);
               }
-              if (playback.isPlaying) {
-                const expectedTime = calculateExpectedTime();
-                if (typeof event.target?.seekTo === 'function') {
-                  event.target.seekTo(expectedTime, true);
+            },
+            onReady: (event: any) => {
+              setYoutubeError(null);
+              setPlayerReady(true);
+              try {
+                if (isMuted) {
+                  if (typeof event.target?.mute === 'function') event.target.mute();
+                } else {
+                  if (typeof event.target?.unMute === 'function') event.target.unMute();
+                  if (typeof event.target?.setVolume === 'function') event.target.setVolume(volume);
                 }
-                if (typeof event.target?.playVideo === 'function') {
-                  window.setTimeout(() => event.target?.playVideo?.(), 150);
+                if (playback.isPlaying && !isAudioSource) {
+                  const expectedTime = calculateExpectedTime();
+                  if (typeof event.target?.seekTo === 'function') {
+                    event.target.seekTo(expectedTime, true);
+                  }
+                  if (typeof event.target?.playVideo === 'function') {
+                    event.target.playVideo();
+                  }
                 }
+              } catch (err) {
+                console.warn('YouTube player onReady error handled:', err);
               }
-            } catch (err) {
-              console.warn('YouTube player onReady error handled:', err);
-            }
+            },
+            onStateChange: (event: any) => {
+              // YT.PlayerState.PLAYING = 1
+              if (event.data === 1) {
+                setAudioUnlocked(true);
+                setYoutubeError(null);
+              }
+              // YT.PlayerState.ENDED = 0
+              if (event.data === 0 && onNextTrack) {
+                onNextTrack();
+              }
+            },
           },
-          onStateChange: (event: any) => {
-            // YT.PlayerState.ENDED = 0
-            if (event.data === 0 && onNextTrack) {
-              onNextTrack();
-            }
-          },
-        },
-      });
+        });
+      } catch (err) {
+        console.error('Failed to create YouTube player:', err);
+      }
+    };
+
+    // Hook official API callback and polling fallback
+    const prevApiReady = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof prevApiReady === 'function') prevApiReady();
+      initPlayer();
     };
 
     if (window.YT && window.YT.Player) {
@@ -133,7 +257,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           clearInterval(checkInterval);
           initPlayer();
         }
-      }, 200);
+      }, 150);
     }
 
     return () => {
@@ -143,30 +267,39 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !isAudioSource || !currentSong?.sourceUrl) return;
-    if (audio.src !== currentSong.sourceUrl) {
+    if (!audio) return;
+    if (!isAudioSource || !currentSong?.sourceUrl) {
+      audio.pause();
+      return;
+    }
+
+    if (lastSourceUrlRef.current !== currentSong.sourceUrl) {
+      lastSourceUrlRef.current = currentSong.sourceUrl;
       audio.src = currentSong.sourceUrl;
       audio.currentTime = playback.currentTime || 0;
+      audio.load();
     }
-    audio.volume = isMuted ? 0 : volume / 100;
-    if (playback.isPlaying) audio.play().catch(() => setAudioUnlocked(false));
-    else audio.pause();
-  }, [currentSong?.sourceUrl, playback.isPlaying, isAudioSource, isMuted, volume]);
 
-  // Compute expected server playback timestamp accounting for network transit
-  const calculateExpectedTime = () => {
-    if (!playback.isPlaying) {
-      return playback.currentTime;
+    audio.volume = isMuted ? 0 : volume / 100;
+    if (playback.isPlaying) {
+      audio.play().then(() => setAudioUnlocked(true)).catch((err) => {
+        console.warn('Audio play auto-policy handled:', err);
+        setAudioUnlocked(false);
+      });
+    } else {
+      audio.pause();
     }
-    const elapsed = (Date.now() - playback.updatedAt) / 1000;
-    const computed = playback.currentTime + elapsed;
-    return Math.min(computed, playback.duration || 3600);
-  };
+  }, [currentSong?.sourceUrl, playback.isPlaying, isAudioSource, isMuted, volume]);
 
   // Synchronize player with authoritative playback state changes
   useEffect(() => {
     if (!playerRef.current || !playerReady) return;
-    if (isAudioSource) return;
+    if (isAudioSource) {
+      try {
+        playerRef.current.pauseVideo?.();
+      } catch (e) {}
+      return;
+    }
 
     try {
       // 1. Song changed?
@@ -175,11 +308,20 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         if (currentLoaded !== currentSong.videoId) {
           setYoutubeError(null);
           const expected = calculateExpectedTime();
-          playerRef.current.loadVideoById(currentSong.videoId, expected);
+          if (typeof playerRef.current.loadVideoById === 'function') {
+            playerRef.current.loadVideoById({
+              videoId: currentSong.videoId,
+              startSeconds: expected,
+            });
+          }
           if (playback.isPlaying) {
-            window.setTimeout(() => playerRef.current?.playVideo?.(), 150);
+            window.setTimeout(() => {
+              try {
+                playerRef.current?.playVideo?.();
+              } catch (e) {}
+            }, 180);
           } else {
-            playerRef.current.pauseVideo();
+            playerRef.current.pauseVideo?.();
           }
           return;
         }
@@ -194,9 +336,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         if (Math.abs(currentSec - expected) > 1.2) {
           playerRef.current.seekTo(expected, true);
         }
-        playerRef.current.playVideo();
+        playerRef.current.playVideo?.();
       } else if (!playback.isPlaying && playerState === 1) {
-        playerRef.current.pauseVideo();
+        playerRef.current.pauseVideo?.();
         playerRef.current.seekTo(playback.currentTime, true);
       }
 
@@ -212,19 +354,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     } catch (err) {
       console.warn('YouTube sync glitch handled:', err);
     }
-  }, [playback.isPlaying, playback.currentSong?.videoId, playback.currentTime, playback.updatedAt, playerReady]);
+  }, [playback.isPlaying, playback.currentSong?.videoId, playback.currentTime, playback.updatedAt, playerReady, isAudioSource, isScrubbing, calculateExpectedTime]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !isAudioSource || !Number.isFinite(playback.currentTime)) return;
     const expectedTime = calculateExpectedTime();
     if (Math.abs(audio.currentTime - expectedTime) > 1.5) audio.currentTime = expectedTime;
-  }, [playback.currentTime, playback.updatedAt, isAudioSource]);
+  }, [playback.currentTime, playback.updatedAt, isAudioSource, calculateExpectedTime]);
 
   // Periodic local playhead update & visualizer loop
   useEffect(() => {
     const timer = setInterval(() => {
-      if (playerRef.current && playerReady && !isScrubbing) {
+      if (isAudioSource && audioRef.current && !isScrubbing) {
+        setLocalCurrentTime(audioRef.current.currentTime);
+      } else if (playerRef.current && playerReady && !isScrubbing) {
         try {
           const t = playerRef.current.getCurrentTime?.() || 0;
           setLocalCurrentTime(t);
@@ -237,7 +381,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }, 500);
 
     return () => clearInterval(timer);
-  }, [playerReady, isScrubbing, playback.isPlaying, playback.currentTime]);
+  }, [playerReady, isScrubbing, playback.isPlaying, playback.currentTime, isAudioSource]);
 
   // Audio Equalizer Canvas animation
   useEffect(() => {
@@ -353,48 +497,39 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   // Play / Pause toggle
   const handlePlayPause = () => {
     if (!hasBaton) {
-      if (batonOwnerName && onRequestBaton) onRequestBaton();
-      else if (onClaimBaton) onClaimBaton();
-      return;
+      if (isSoloMember || !batonOwnerName) {
+        if (onClaimBaton) onClaimBaton();
+      } else {
+        if (onRequestBaton) onRequestBaton();
+        return;
+      }
     }
     const nextIsPlaying = !playback.isPlaying;
-    const curr = playerRef.current?.getCurrentTime?.() || localCurrentTime;
+    const curr = isAudioSource
+      ? (audioRef.current?.currentTime ?? localCurrentTime)
+      : (playerRef.current?.getCurrentTime?.() ?? localCurrentTime);
     try {
       if (isAudioSource) {
-        if (nextIsPlaying) audioRef.current?.play();
-        else audioRef.current?.pause();
+        if (nextIsPlaying) {
+          audioRef.current?.play().then(() => setAudioUnlocked(true)).catch(() => setAudioUnlocked(false));
+        } else {
+          audioRef.current?.pause();
+        }
       } else if (nextIsPlaying) {
         playerRef.current?.playVideo?.();
       } else {
         playerRef.current?.pauseVideo?.();
       }
     } catch (err) {
-      console.warn('Direct YouTube playback command handled:', err);
+      console.warn('Direct playback command handled:', err);
     }
     onPlaybackUpdate({
       isPlaying: nextIsPlaying,
       currentTime: curr,
       updatedAt: Date.now(),
     });
-    if (nextIsPlaying && !playerReady) {
-      setAudioUnlocked(false);
-    }
-  };
-
-  const unlockAudio = () => {
-    try {
-      if (isAudioSource) audioRef.current?.play();
-      else playerRef.current?.playVideo?.();
+    if (nextIsPlaying) {
       setAudioUnlocked(true);
-      if (hasBaton && !playback.isPlaying) {
-        onPlaybackUpdate({
-          isPlaying: true,
-          currentTime: isAudioSource ? audioRef.current?.currentTime || localCurrentTime : playerRef.current?.getCurrentTime?.() || localCurrentTime,
-          updatedAt: Date.now(),
-        });
-      }
-    } catch (err) {
-      console.warn('Audio unlock handled:', err);
     }
   };
 
@@ -403,7 +538,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     if (!hasBaton) return;
     const newTime = parseFloat(e.target.value);
     setLocalCurrentTime(newTime);
-    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+    if (isAudioSource && audioRef.current) {
+      try {
+        audioRef.current.currentTime = newTime;
+      } catch (err) {
+        console.warn('Audio seek error handled:', err);
+      }
+    } else if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
       try {
         playerRef.current.seekTo(newTime, true);
       } catch (err) {
@@ -433,51 +574,131 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         }`}
       />
 
-      {/* Hidden YouTube IFrame container for synchronous audio playback */}
-      <div className="relative w-full aspect-video rounded-2xl overflow-hidden mb-4 bg-black sm:absolute sm:opacity-0 sm:pointer-events-none sm:w-1 sm:h-1 sm:mb-0">
-        <div id="youtube-player-element" className="w-full h-full" />
-      </div>
-      {isAudioSource && <audio ref={audioRef} controls={isMobileViewport} className="w-full mb-4" onLoadedMetadata={(event) => onPlaybackUpdate({ duration: event.currentTarget.duration })} onTimeUpdate={(event) => { setLocalCurrentTime(event.currentTarget.currentTime); if (hasBaton) onPlaybackUpdate({ currentTime: event.currentTarget.currentTime, updatedAt: Date.now() }); }} onEnded={() => hasBaton && onNextTrack?.()} />}
-
-      {/* Synchronized Stream Badge */}
-      <div className="flex items-center justify-between mb-4">
+      {/* Synchronized Stream Badge & Mode Toggles */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/10 rounded-full text-[10px] font-bold tracking-widest uppercase text-purple-400">
             <Radio className={`w-3.5 h-3.5 ${playback.isPlaying ? 'text-emerald-400 animate-pulse' : 'text-white/40'}`} />
             <span>{playback.isPlaying ? 'Live Audio Synced' : 'Audio Paused'}</span>
           </div>
           <span className="text-[11px] text-white/40 hidden sm:inline font-mono">
-            Clock Drift: &lt;{audioLatencyMs}ms
+            Drift: &lt;{audioLatencyMs}ms
           </span>
         </div>
 
-        {/* Baton Owner indicator */}
-        <div className="flex items-center gap-1.5 text-xs">
-          {hasBaton ? (
-            <span className="flex items-center gap-1 text-purple-300 font-bold bg-purple-600/20 border border-purple-500/30 px-3 py-1 rounded-full shadow-sm">
-              <Crown className="w-3.5 h-3.5 text-purple-400" />
-              You Have Master Control
-            </span>
-          ) : (
-            <span className="text-white/50 text-xs">
-              Baton held by: <strong className="text-purple-300 font-medium">{batonOwnerName || 'Nobody (Open)'}</strong>
-            </span>
-          )}
+        <div className="flex items-center gap-2">
+          {/* Toggle between Turntable and Video View */}
+          <button
+            onClick={() => setShowVideoPlayer(!showVideoPlayer)}
+            title={showVideoPlayer ? 'Switch to Vinyl Turntable' : 'Watch YouTube Video'}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition cursor-pointer ${
+              showVideoPlayer
+                ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
+                : 'bg-white/5 text-white/70 border-white/10 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <Tv className="w-3.5 h-3.5" />
+            <span>{showVideoPlayer ? 'Vinyl View' : 'Watch Video'}</span>
+          </button>
+
+          {/* Baton Owner indicator */}
+          <div className="flex items-center gap-1.5 text-xs">
+            {hasBaton ? (
+              <span className="flex items-center gap-1 text-purple-300 font-bold bg-purple-600/20 border border-purple-500/30 px-3 py-1 rounded-full shadow-sm">
+                <Crown className="w-3.5 h-3.5 text-purple-400" />
+                Master DJ
+              </span>
+            ) : (
+              <span className="text-white/50 text-xs">
+                DJ: <strong className="text-purple-300 font-medium">{batonOwnerName || 'Nobody (Open)'}</strong>
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {currentSong && !audioUnlocked && (
-        <button
-          onClick={unlockAudio}
-          className="w-full mb-4 px-4 py-3 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 font-bold text-sm cursor-pointer"
-        >
-          Tap to enable audio and play on this device
-        </button>
+      {/* YouTube IFrame container: Standard dimensions maintain mobile Chrome background audio execution */}
+      <div
+        className={
+          showVideoPlayer
+            ? 'relative w-full aspect-video rounded-2xl overflow-hidden mb-5 bg-black border border-white/10 shadow-2xl transition-all'
+            : 'fixed -left-[9999px] -top-[9999px] w-[360px] h-[240px] opacity-0 pointer-events-none'
+        }
+      >
+        <div id="youtube-player-element" className="w-full h-full" />
+      </div>
+
+      {isAudioSource && (
+        <audio
+          ref={audioRef}
+          preload="auto"
+          className="hidden"
+          onLoadedMetadata={(event) => {
+            const d = Math.round(event.currentTarget.duration);
+            if (Number.isFinite(d) && d > 0 && hasBaton) {
+              onPlaybackUpdate({ duration: d });
+            }
+          }}
+          onTimeUpdate={(event) => {
+            setLocalCurrentTime(event.currentTarget.currentTime);
+          }}
+          onEnded={() => {
+            if (hasBaton && onNextTrack) {
+              onNextTrack();
+            }
+          }}
+          onError={(e) => {
+            console.error('Audio element error:', e);
+            setAudioUnlocked(false);
+          }}
+        />
       )}
 
+      {/* Mobile Autoplay / Sync Banner */}
+      {currentSong && playback.isPlaying && !audioUnlocked && (
+        <div className="w-full mb-4">
+          <button
+            onClick={unlockAudio}
+            className="w-full px-4 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2.5 transition active:scale-[0.99] cursor-pointer animate-pulse"
+          >
+            <Volume2 className="w-5 h-5 text-slate-950" />
+            <span>Tap to Synchronize Audio with Room 🔊</span>
+          </button>
+        </div>
+      )}
+
+      {/* Floating Bottom Sync Banner for Mobile Viewport */}
+      {currentSong && playback.isPlaying && !audioUnlocked && (
+        <div className="fixed bottom-20 left-4 right-4 z-50 sm:hidden">
+          <button
+            onClick={unlockAudio}
+            className="w-full py-3.5 px-4 rounded-2xl bg-emerald-400 text-slate-950 font-black text-sm shadow-2xl shadow-emerald-500/80 flex items-center justify-center gap-2.5 border border-white/40 active:scale-95 transition cursor-pointer animate-bounce"
+          >
+            <Volume2 className="w-5 h-5 text-slate-950" />
+            <span>TAP TO UNMUTE &amp; SYNC AUDIO 🔊</span>
+          </button>
+        </div>
+      )}
+
+      {/* Embed Restriction Warning */}
       {youtubeError && (
-        <div className="w-full mb-4 px-4 py-3 rounded-2xl bg-rose-500/10 border border-rose-400/30 text-rose-200 text-sm">
-          YouTube could not embed this video on this device. Try another catalog track or open the video directly on YouTube.
+        <div className="w-full mb-4 px-4 py-3.5 rounded-2xl bg-rose-500/15 border border-rose-400/30 text-rose-200 text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <div className="font-semibold text-rose-200">Embedding restricted by video owner (Error {youtubeError})</div>
+              <div className="text-xs text-rose-300/80">Try another song or skip to the next track in queue.</div>
+            </div>
+          </div>
+          {onNextTrack && (
+            <button
+              onClick={onNextTrack}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-500/30 hover:bg-rose-500/40 border border-rose-400/40 text-white text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <SkipForward className="w-3.5 h-3.5" />
+              <span>Skip Track</span>
+            </button>
+          )}
         </div>
       )}
 

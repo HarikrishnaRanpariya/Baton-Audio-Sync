@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV ANDROID_HOME="/opt/android-sdk"
 ENV ANDROID_SDK_ROOT="/opt/android-sdk"
 ENV JAVA_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
-ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/34.0.0"
+ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/34.0.0:${ANDROID_HOME}/build-tools/35.0.0"
 
 # Install base dependencies, OpenJDK 17, and build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -31,21 +31,21 @@ RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
     mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
     rm /tmp/cmdline-tools.zip
 
-# Accept Android SDK licenses and install SDK platform 34 and build tools
+# Accept Android SDK licenses and install SDK platforms and build tools (API 34 and 35)
 RUN yes | sdkmanager --licenses && \
-    sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+    sdkmanager "platform-tools" "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0"
 
 WORKDIR /app
 
 # Copy project files
 COPY . .
 
-# Run npm install and prebuild native Android directory
+# Install dependencies in mobile directory
+WORKDIR /app/mobile
 RUN npm install
-RUN npx expo prebuild --platform android --clean
 
 # Set executable permission for Gradle wrapper
-WORKDIR /app/android
+WORKDIR /app/mobile/android
 RUN chmod +x gradlew
 
 # Default command: build release APK

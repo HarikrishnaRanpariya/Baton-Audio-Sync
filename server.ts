@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
@@ -58,6 +59,8 @@ interface RoomState {
       duration: number;
       addedBy: string;
       addedByName: string;
+      sourceUrl?: string;
+      sourceType?: string;
     } | null;
     isPlaying: boolean;
     currentTime: number;
@@ -275,26 +278,62 @@ async function startServer() {
   const server = http.createServer(app);
 
   app.use(express.json());
+
+  const uploadDir = path.join(process.cwd(), 'public', 'audio-uploads');
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  const storage = multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, uploadDir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.mp3';
+      const cleanName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+      cb(null, cleanName);
+    },
+  });
+
   const upload = multer({
-    dest: path.join(process.cwd(), 'public', 'audio-uploads'),
-    limits: { fileSize: 50 * 1024 * 1024 },
+    storage,
+    limits: { fileSize: 100 * 1024 * 1024 },
     fileFilter: (_req, file, callback) => {
       const isAudioMime = file.mimetype.startsWith('audio/');
       const isAudioExtension = /\.(mp3|m4a|aac|wav|ogg|oga|flac|webm)$/i.test(file.originalname);
       callback(null, isAudioMime || isAudioExtension);
     },
   });
-  app.use('/audio-uploads', express.static(path.join(process.cwd(), 'public', 'audio-uploads')));
+
+  app.use('/audio-uploads', express.static(uploadDir, {
+    setHeaders: (res, filePath) => {
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (filePath.endsWith('.mp3')) {
+        res.setHeader('Content-Type', 'audio/mpeg');
+      } else if (filePath.endsWith('.wav')) {
+        res.setHeader('Content-Type', 'audio/wav');
+      } else if (filePath.endsWith('.ogg') || filePath.endsWith('.oga')) {
+        res.setHeader('Content-Type', 'audio/ogg');
+      } else if (filePath.endsWith('.m4a') || filePath.endsWith('.aac')) {
+        res.setHeader('Content-Type', 'audio/mp4');
+      } else if (filePath.endsWith('.flac')) {
+        res.setHeader('Content-Type', 'audio/flac');
+      }
+    },
+  }));
 
   app.post('/api/audio-upload', upload.single('file'), (req, res) => {
     if (!req.file) {
       res.status(400).json({ error: 'Only MP3, M4A, AAC, WAV, OGG, FLAC, or WEBM audio files are supported.' });
       return;
     }
+    const relativeUrl = `/audio-uploads/${req.file.filename}`;
     res.json({
-      url: `${req.protocol}://${req.get('host')}/audio-uploads/${req.file.filename}`,
+      url: relativeUrl,
+      filename: req.file.filename,
       mimeType: req.file.mimetype,
       originalName: req.file.originalname,
+      size: req.file.size,
     });
   });
 
@@ -698,7 +737,13 @@ async function startServer() {
           if (song) {
             room.playback.currentSong = song;
             // Add to playlist history if not already there
-            if (!room.playlist.some((p) => p.videoId === song.videoId)) {
+            const songMatchesHistory = (p: any) => {
+              if (song.videoId && p.videoId && p.videoId.trim() === song.videoId.trim()) return true;
+              if (song.sourceUrl && p.sourceUrl && p.sourceUrl.trim() === song.sourceUrl.trim()) return true;
+              if (song.title && p.title && song.title.trim().toLowerCase() === p.title.trim().toLowerCase()) return true;
+              return false;
+            };
+            if (!room.playlist.some(songMatchesHistory)) {
               room.playlist.push(song);
             }
           }
@@ -733,20 +778,23 @@ async function startServer() {
           // Duplicate verification: Check against current playing song and master queue
           const normTitle = (song.title || '').trim().toLowerCase();
           const normArtist = (song.artist || '').trim().toLowerCase();
-          const songVideoId = song.videoId;
+          const songVideoId = (song.videoId || '').trim();
+          const songSourceUrl = (song.sourceUrl || '').trim();
 
-          const isDuplicateOfCurrent = Boolean(
-            room.playback.currentSong &&
-            (room.playback.currentSong.videoId === songVideoId ||
-              (room.playback.currentSong.title.trim().toLowerCase() === normTitle &&
-               room.playback.currentSong.artist.trim().toLowerCase() === normArtist))
-          );
+          const isSongMatch = (other: any) => {
+            if (!other) return false;
+            if (songVideoId && other.videoId && other.videoId.trim() === songVideoId) return true;
+            if (songSourceUrl && other.sourceUrl && other.sourceUrl.trim() === songSourceUrl) return true;
+            if (normTitle && other.title && other.title.trim().toLowerCase() === normTitle) {
+              if (normArtist && other.artist && other.artist.trim().toLowerCase() === normArtist) {
+                return true;
+              }
+            }
+            return false;
+          };
 
-          const isDuplicateInQueue = room.masterQueue.some((q) =>
-            q.videoId === songVideoId ||
-            (q.title.trim().toLowerCase() === normTitle &&
-             q.artist.trim().toLowerCase() === normArtist)
-          );
+          const isDuplicateOfCurrent = Boolean(room.playback.currentSong && isSongMatch(room.playback.currentSong));
+          const isDuplicateInQueue = room.masterQueue.some((q) => isSongMatch(q));
 
           if (isDuplicateOfCurrent || isDuplicateInQueue) {
             const reason = isDuplicateOfCurrent ? 'currently playing' : 'already part of the master queue';
@@ -764,12 +812,12 @@ async function startServer() {
           // Format new queued song item
           const newSongItem = {
             id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            videoId: song.videoId,
-            sourceUrl: song.sourceUrl,
-            sourceType: song.sourceType,
+            videoId: song.videoId || '',
+            sourceUrl: song.sourceUrl || '',
+            sourceType: song.sourceType || (song.sourceUrl ? 'audio-url' : 'youtube'),
             title: song.title,
-            artist: song.artist,
-            thumbnail: song.thumbnail || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80',
+            artist: song.artist || 'Unknown Artist',
+            thumbnail: song.thumbnail || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
             duration: song.duration || 210,
             addedBy: user.id,
             addedByName: user.name,
@@ -787,7 +835,7 @@ async function startServer() {
             room.masterQueue.push(newSongItem);
           }
 
-          if (!room.playlist.some((p) => p.videoId === newSongItem.videoId)) {
+          if (!room.playlist.some((p) => isSongMatch(p))) {
             room.playlist.push(newSongItem);
           }
 
@@ -993,15 +1041,28 @@ async function startServer() {
           let added = 0;
           let duplicates = 0;
 
+          const matchSongInList = (s: any, list: any[]) => {
+            const sVid = (s.videoId || '').trim();
+            const sUrl = (s.sourceUrl || '').trim();
+            const sTitle = (s.title || '').trim().toLowerCase();
+            return list.some((item) => {
+              if (sVid && item.videoId && item.videoId.trim() === sVid) return true;
+              if (sUrl && item.sourceUrl && item.sourceUrl.trim() === sUrl) return true;
+              if (sTitle && item.title && item.title.trim().toLowerCase() === sTitle) return true;
+              return false;
+            });
+          };
+
           if (mode === 'replace') {
             const newQ: any[] = [];
-            const curVid = room.playback.currentSong?.videoId;
+            const curSong = room.playback.currentSong;
             for (const s of target.songs) {
-              if (curVid && s.videoId === curVid) {
+              const isCur = curSong && matchSongInList(s, [curSong]);
+              if (isCur) {
                 duplicates++;
                 continue;
               }
-              if (!newQ.some((q) => q.videoId === s.videoId)) {
+              if (!matchSongInList(s, newQ)) {
                 newQ.push({
                   ...s,
                   id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1022,10 +1083,10 @@ async function startServer() {
             }
           } else {
             // Append with duplicate filtering against currentSong and masterQueue
-            const curVid = room.playback.currentSong?.videoId;
+            const curSong = room.playback.currentSong;
             for (const s of target.songs) {
-              const isCur = curVid && s.videoId === curVid;
-              const inQ = room.masterQueue.some((q) => q.videoId === s.videoId);
+              const isCur = curSong && matchSongInList(s, [curSong]);
+              const inQ = matchSongInList(s, room.masterQueue);
               if (isCur || inQ) {
                 duplicates++;
                 continue;

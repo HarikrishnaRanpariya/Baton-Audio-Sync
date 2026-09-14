@@ -17,7 +17,13 @@
     "android": {
       "package": "com.baton.audiosync",
       "versionCode": 1,
-      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "WAKE_LOCK"]
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "WAKE_LOCK",
+        "READ_MEDIA_AUDIO",
+        "MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "extra": {
       "eas": {
