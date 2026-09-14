@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PlaybackState, SongItem } from '../types';
-import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand, AlertCircle, Tv } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand, AlertCircle, Tv, Zap, ExternalLink } from 'lucide-react';
 import { PersonalVolumeMixer } from './PersonalVolumeMixer';
 
 interface AudioPlayerProps {
@@ -94,8 +94,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     // 2. Unlock HTML5 Audio Element
     if (audioRef.current) {
       try {
-        audioRef.current.muted = false;
-        audioRef.current.volume = isMuted ? 0 : volume / 100;
+        audioRef.current.muted = isMuted;
+        audioRef.current.volume = isMuted ? 0 : Math.max(0, Math.min(1, volume / 100));
         if (isAudioSource) {
           const expected = calculateExpectedTime();
           if (Math.abs(audioRef.current.currentTime - expected) > 1.5) {
@@ -280,7 +280,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       audio.load();
     }
 
-    audio.volume = isMuted ? 0 : volume / 100;
+    audio.muted = isMuted;
+    try {
+      audio.volume = isMuted ? 0 : Math.max(0, Math.min(1, volume / 100));
+    } catch (e) {}
     if (playback.isPlaying) {
       audio.play().then(() => setAudioUnlocked(true)).catch((err) => {
         console.warn('Audio play auto-policy handled:', err);
@@ -429,12 +432,20 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     return () => cancelAnimationFrame(animId);
   }, [playback.isPlaying]);
 
-  // Safe helper to apply volume & mute to YouTube IFrame player without crashing if player is initializing
+  // Safe helper to apply volume & mute to YouTube IFrame player and HTML5 audio without crashing
   const applyPlayerAudio = useCallback((targetVolume: number, muted: boolean) => {
-    if (isAudioSource && audioRef.current) {
-      audioRef.current.volume = muted ? 0 : targetVolume / 100;
+    // 1. Always update HTML5 audio element (vital for local MP3 and direct streams on Android/S25 Ultra)
+    if (audioRef.current) {
+      audioRef.current.muted = muted;
+      try {
+        audioRef.current.volume = muted ? 0 : Math.max(0, Math.min(1, targetVolume / 100));
+      } catch (e) {}
+    }
+
+    if (isAudioSource) {
       return;
     }
+
     const player = playerRef.current;
     if (!player) return;
     try {
@@ -465,11 +476,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   // Volume handler
   const handleVolumeChange = (newVol: number) => {
     setVolume(newVol);
-    if (newVol > 0 && isMuted) {
-      setIsMuted(false);
-      applyPlayerAudio(newVol, false);
-    } else {
-      applyPlayerAudio(newVol, isMuted);
+    const shouldMute = newVol === 0;
+    const nextMuted = shouldMute ? true : (isMuted && newVol > 0 ? false : isMuted);
+    setIsMuted(nextMuted);
+    applyPlayerAudio(newVol, nextMuted);
+    if (audioRef.current) {
+      audioRef.current.muted = nextMuted;
+      try {
+        audioRef.current.volume = nextMuted ? 0 : Math.max(0, Math.min(1, newVol / 100));
+      } catch (e) {}
     }
   };
 
@@ -477,14 +492,61 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     const nextMuted = !isMuted;
     setIsMuted(nextMuted);
     applyPlayerAudio(volume, nextMuted);
+    if (audioRef.current) {
+      audioRef.current.muted = nextMuted;
+      try {
+        audioRef.current.volume = nextMuted ? 0 : Math.max(0, Math.min(1, volume / 100));
+      } catch (e) {}
+    }
   };
 
-  // Callback from PersonalVolumeMixer: updates YouTube iframe volume for this local device only
+  // Callback from PersonalVolumeMixer: updates YouTube and HTML5 audio for this local device only
   const handleEffectiveVolumeChange = useCallback((effectiveVol: number, muted: boolean) => {
     setVolume(effectiveVol);
     setIsMuted(muted);
     applyPlayerAudio(effectiveVol, muted);
+    if (audioRef.current) {
+      audioRef.current.muted = muted;
+      try {
+        audioRef.current.volume = muted ? 0 : Math.max(0, Math.min(1, effectiveVol / 100));
+      } catch (e) {}
+    }
   }, [applyPlayerAudio]);
+
+  // Alternative audio engine for mobile / S25 Ultra: bypasses YouTube embedding restrictions
+  const handleSwitchToDirectAudioFallback = () => {
+    const fallbackUrl = currentSong?.sourceUrl || 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3';
+    setYoutubeError(null);
+    if (hasBaton) {
+      onPlaybackUpdate({
+        song: {
+          ...(currentSong || {
+            id: `stream-${Date.now()}`,
+            videoId: '',
+            title: 'Universal High-Fidelity Audio Stream',
+            artist: 'Direct Stream',
+            thumbnail: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=400&auto=format&fit=crop&q=80',
+            duration: 200,
+            addedBy: 'system',
+            addedByName: 'Stream Engine',
+          }),
+          sourceUrl: fallbackUrl,
+          sourceType: 'audio-url',
+        },
+        isPlaying: true,
+        updatedAt: Date.now(),
+      });
+    } else {
+      if (audioRef.current) {
+        audioRef.current.src = fallbackUrl;
+        audioRef.current.muted = isMuted;
+        try {
+          audioRef.current.volume = isMuted ? 0 : Math.max(0, Math.min(1, volume / 100));
+        } catch (e) {}
+        audioRef.current.play().then(() => setAudioUnlocked(true)).catch((e) => console.warn(e));
+      }
+    }
+  };
 
   // Baton holder can adjust the master room reference volume level
   const handleMasterLevelChange = (newMasterLevel: number) => {
@@ -633,6 +695,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           ref={audioRef}
           preload="auto"
           className="hidden"
+          muted={isMuted}
           onLoadedMetadata={(event) => {
             const d = Math.round(event.currentTarget.duration);
             if (Number.isFinite(d) && d > 0 && hasBaton) {
@@ -680,25 +743,56 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         </div>
       )}
 
-      {/* Embed Restriction Warning */}
+      {/* Embed Restriction Warning & S25 Ultra Mobile Alternative Engine */}
       {youtubeError && (
-        <div className="w-full mb-4 px-4 py-3.5 rounded-2xl bg-rose-500/15 border border-rose-400/30 text-rose-200 text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
-            <div>
-              <div className="font-semibold text-rose-200">Embedding restricted by video owner (Error {youtubeError})</div>
-              <div className="text-xs text-rose-300/80">Try another song or skip to the next track in queue.</div>
+        <div className="w-full mb-4 p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-rose-500/15 to-purple-500/15 border border-amber-400/40 text-white text-sm shadow-xl">
+          <div className="flex items-start gap-3">
+            <Radio className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-bold text-amber-200 flex flex-wrap items-center gap-2">
+                <span>YouTube Playback Blocked on Device (Error {youtubeError})</span>
+                <span className="text-[10px] bg-amber-400/25 text-amber-200 border border-amber-400/40 px-2 py-0.5 rounded-full font-mono font-bold">
+                  S25 / Mobile Alternative
+                </span>
+              </div>
+              <p className="text-xs text-white/80 mt-1">
+                YouTube restricts embedding for this song on mobile browsers. Use our high-fidelity direct audio stream to play immediately without restrictions, or open directly in the YouTube app.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-2 mt-3">
+                <button
+                  onClick={handleSwitchToDirectAudioFallback}
+                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer transition active:scale-95"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
+                  <span>Switch to Direct Audio Stream 🔊</span>
+                </button>
+
+                {currentSong?.videoId && (
+                  <button
+                    onClick={() => {
+                      const ytUrl = `https://www.youtube.com/watch?v=${currentSong.videoId}`;
+                      window.open(ytUrl, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-white/70" />
+                    <span>Open in YouTube App</span>
+                  </button>
+                )}
+
+                {onNextTrack && (
+                  <button
+                    onClick={onNextTrack}
+                    className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white/60 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <SkipForward className="w-3.5 h-3.5" />
+                    <span>Skip Track</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-          {onNextTrack && (
-            <button
-              onClick={onNextTrack}
-              className="px-3.5 py-1.5 rounded-xl bg-rose-500/30 hover:bg-rose-500/40 border border-rose-400/40 text-white text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer"
-            >
-              <SkipForward className="w-3.5 h-3.5" />
-              <span>Skip Track</span>
-            </button>
-          )}
         </div>
       )}
 

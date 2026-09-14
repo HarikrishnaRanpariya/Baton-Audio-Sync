@@ -337,6 +337,40 @@ async function startServer() {
     });
   });
 
+  // Audio Stream Proxy (allows S25 and mobile browsers to stream online audio without CORS issues)
+  app.get('/api/proxy-audio', async (req, res) => {
+    const rawUrl = req.query.url as string;
+    if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) {
+      res.status(400).json({ error: 'Valid HTTP/HTTPS audio URL required' });
+      return;
+    }
+    try {
+      const response = await fetch(rawUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': '*/*',
+        },
+      });
+      if (!response.ok) {
+        res.status(response.status).json({ error: 'Failed to fetch audio stream' });
+        return;
+      }
+      res.setHeader('Content-Type', response.headers.get('content-type') || 'audio/mpeg');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'no-cache');
+      if (response.body) {
+        const { Readable } = await import('stream');
+        // @ts-ignore
+        Readable.fromWeb(response.body).pipe(res);
+      } else {
+        res.status(500).end();
+      }
+    } catch (err: any) {
+      console.warn('Audio proxy fetch error handled:', err?.message || err);
+      res.status(502).json({ error: 'Could not proxy audio stream' });
+    }
+  });
+
   // WebSocket Server
   const wss = new WebSocketServer({ server });
 

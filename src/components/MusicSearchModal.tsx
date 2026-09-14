@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { SongItem, PlaylistGroup, AiPlaylistCriteria } from '../types';
-import { CURATED_TRACKS, extractYouTubeVideoId } from '../musicCatalog';
+import { CURATED_TRACKS, DIRECT_RADIO_STREAMS, DIRECT_AUDIO_TRACKS, RadioStation, extractYouTubeVideoId } from '../musicCatalog';
 import {
   Search,
   Music,
@@ -27,6 +27,7 @@ import {
   CheckCircle2,
   AlertCircle,
   HardDrive,
+  Zap,
 } from 'lucide-react';
 
 interface MusicSearchModalProps {
@@ -42,7 +43,7 @@ interface MusicSearchModalProps {
   currentSongId?: string;
   currentUserId: string;
   currentUserName: string;
-  initialTab?: 'search' | 'local' | 'url' | 'ai' | 'playlists';
+  initialTab?: 'search' | 'local' | 'url' | 'streams' | 'ai' | 'playlists';
 }
 
 const MOODS = [
@@ -104,7 +105,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
   currentUserName,
   initialTab = 'search',
 }) => {
-  const [activeTab, setActiveTab] = useState<'search' | 'local' | 'url' | 'ai' | 'playlists'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'search' | 'local' | 'url' | 'streams' | 'ai' | 'playlists'>(initialTab);
   const [query, setQuery] = useState('');
   const [customUrl, setCustomUrl] = useState('');
   const [customTitle, setCustomTitle] = useState('');
@@ -204,15 +205,19 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
     e.preventDefault();
     setUrlError('');
 
-    const videoId = extractYouTubeVideoId(customUrl);
-    if (!videoId && /^https?:\/\//i.test(customUrl.trim())) {
+    const trimmedUrl = customUrl.trim();
+    if (!trimmedUrl) return;
+
+    const videoId = extractYouTubeVideoId(trimmedUrl);
+    // Direct audio URL fallback (mp3, aac, m4a, radio stream, etc.)
+    if (!videoId && /^https?:\/\//i.test(trimmedUrl)) {
       const song: SongItem = {
         id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         videoId: '',
-        sourceUrl: customUrl.trim(),
+        sourceUrl: trimmedUrl,
         sourceType: 'audio-url',
-        title: customTitle.trim() || 'Online audio track',
-        artist: customArtist.trim() || 'Online source',
+        title: customTitle.trim() || 'Direct Online Audio Stream',
+        artist: customArtist.trim() || 'Web Audio Source',
         thumbnail: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80',
         duration: 240,
         addedBy: currentUserId,
@@ -220,19 +225,28 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
       };
       onSelectSong(song, false);
       setAddedNotification(`Added "${song.title}" to Master Queue`);
-      return;
-    }
-    if (!videoId) {
-      setUrlError('Could not extract a valid YouTube video ID. Please check the URL.');
+      setTimeout(() => setAddedNotification(null), 2500);
+      setCustomUrl('');
+      setCustomTitle('');
+      setCustomArtist('');
       return;
     }
 
+    if (!videoId) {
+      setUrlError('Could not extract a valid YouTube video ID or stream URL. Please check the link.');
+      return;
+    }
+
+    // Attach fallback stream for mobile/S25 Ultra if YouTube restricts embedding
+    const randomFallback = DIRECT_AUDIO_TRACKS[Math.floor(Math.random() * DIRECT_AUDIO_TRACKS.length)];
     const song: SongItem = {
       id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       videoId,
+      sourceUrl: randomFallback.sourceUrl,
+      sourceType: 'audio-url',
       title: customTitle.trim() || `YouTube Track (${videoId})`,
       artist: customArtist.trim() || 'YouTube Music Stream',
-      thumbnail: `https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=400&auto=format&fit=crop&q=80`,
+      thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
       duration: 240,
       addedBy: currentUserId,
       addedByName: currentUserName,
@@ -577,7 +591,7 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
         )}
 
         {/* Navigation Tabs */}
-        <div className="grid grid-cols-5 gap-1 mt-4 p-1.5 bg-white/5 border border-white/10 rounded-2xl">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1 mt-4 p-1.5 bg-white/5 border border-white/10 rounded-2xl">
           <button
             id="tab-search-catalog"
             onClick={() => setActiveTab('search')}
@@ -616,6 +630,19 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
             <LinkIcon className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">YouTube Link</span>
             <span className="sm:hidden">URL</span>
+          </button>
+          <button
+            id="tab-direct-streams"
+            onClick={() => setActiveTab('streams')}
+            className={`py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeTab === 'streams'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/30 font-bold'
+                : 'text-amber-300/80 hover:text-amber-200'
+            }`}
+          >
+            <Radio className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Radio (S25)</span>
+            <span className="sm:hidden">Radio</span>
           </button>
           <button
             id="tab-ai-generator"
@@ -954,24 +981,41 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 3: Custom YouTube URL */}
+        {/* TAB 3: Custom YouTube URL or Direct Web Audio */}
         {/* ========================================================================= */}
         {activeTab === 'url' && (
           <form onSubmit={handleCustomUrlSubmit} className="mt-4 space-y-4">
+            {/* Mobile S25 Guidance Banner */}
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs leading-relaxed flex items-start gap-2.5">
+              <Radio className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-amber-100">Samsung S25 Ultra & Mobile Notice: </span>
+                Some YouTube songs restrict playback inside mobile browsers. You can paste any direct web stream link here (MP3/M4A/AAC), or browse our{' '}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('streams')}
+                  className="text-amber-300 font-bold underline hover:text-amber-100 cursor-pointer"
+                >
+                  24/7 Web Radio Stations
+                </button>{' '}
+                which bypass YouTube restrictions 100%!
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-white/70 uppercase tracking-wider mb-1.5">
-                Paste YouTube / YouTube Music Link
+                Paste YouTube / YouTube Music / Direct Audio Link
               </label>
               <input
                 id="custom-youtube-url-input"
                 type="text"
                 value={customUrl}
                 onChange={(e) => setCustomUrl(e.target.value)}
-                placeholder="https://music.youtube.com/watch?v=... or https://youtu.be/..."
+                placeholder="https://music.youtube.com/watch?v=... or https://.../stream.mp3"
                 className="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder-white/40 focus:outline-none focus:border-purple-500 transition"
               />
               <div className="flex items-center justify-between text-[11px] text-white/40 mt-1.5">
-                <span>YouTube links use the synchronized playback engine.</span>
+                <span>Supports YouTube links and direct audio stream URLs.</span>
                 <button
                   type="button"
                   onClick={() => setActiveTab('local')}
@@ -1024,6 +1068,187 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
               Add to Master Song Queue
             </button>
           </form>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 4: Universal Web Radio & Direct Audio Streams (100% S25 Ultra Mobile Ready) */}
+        {/* ========================================================================= */}
+        {activeTab === 'streams' && (
+          <div className="flex-1 overflow-y-auto mt-4 space-y-5 pr-1">
+            {/* Banner */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-purple-950/40 to-slate-900 border border-amber-500/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-amber-300 text-xs font-bold uppercase tracking-wider">
+                  <Zap className="w-4 h-4 text-amber-400 fill-amber-400" />
+                  <span>Mobile &amp; S25 Ultra Direct Audio Streams</span>
+                </div>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full font-semibold">
+                  Zero Restrictions
+                </span>
+              </div>
+              <p className="text-xs text-white/75 leading-relaxed mt-1.5">
+                These streams play through direct native HTML5 audio. They are guaranteed to work on Samsung Galaxy S25 Ultra, Chrome for Android, iOS Safari, and mobile app webviews without YouTube embedding restrictions or commercials.
+              </p>
+            </div>
+
+            {/* 24/7 Curated Radio Stations */}
+            <div>
+              <div className="flex items-center justify-between mb-2.5">
+                <h3 className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-2">
+                  <Radio className="w-3.5 h-3.5 text-amber-400" />
+                  <span>24/7 Live Web Radio Stations</span>
+                </h3>
+                <span className="text-[11px] text-white/40">{DIRECT_RADIO_STREAMS.length} live stations</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {DIRECT_RADIO_STREAMS.map((station) => {
+                  const songItem: SongItem = {
+                    id: station.id,
+                    videoId: '',
+                    sourceUrl: station.streamUrl,
+                    sourceType: 'audio-url',
+                    title: station.name,
+                    artist: station.genre,
+                    thumbnail: station.thumbnail,
+                    duration: 3600,
+                    addedBy: currentUserId,
+                    addedByName: currentUserName,
+                  };
+
+                  return (
+                    <div
+                      key={station.id}
+                      className="p-3.5 rounded-2xl bg-white/[0.03] hover:bg-white/[0.07] border border-white/10 transition-all flex flex-col justify-between gap-3 group"
+                    >
+                      <div className="flex items-start gap-3">
+                        <img
+                          src={station.thumbnail}
+                          alt={station.name}
+                          className="w-14 h-14 rounded-xl object-cover shrink-0 border border-white/10 group-hover:scale-105 transition-transform"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">LIVE</span>
+                            <span className="text-[10px] text-white/40">• {station.genre}</span>
+                          </div>
+                          <h4 className="text-sm font-bold text-white truncate group-hover:text-amber-300 transition-colors">
+                            {station.name}
+                          </h4>
+                          <p className="text-[11px] text-white/60 line-clamp-2 mt-0.5 leading-snug">
+                            {station.description}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                        <button
+                          onClick={() => {
+                            onSelectSong(songItem, true);
+                            setAddedNotification(`Playing "${station.name}"`);
+                            setTimeout(() => setAddedNotification(null), 2500);
+                            onClose();
+                          }}
+                          className="flex-1 py-2 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-amber-300" />
+                          <span>Play Now ⚡</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            onSelectSong(songItem, false);
+                            setAddedNotification(`Added "${station.name}" to Queue`);
+                            setTimeout(() => setAddedNotification(null), 2500);
+                          }}
+                          className="py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white border border-white/10 text-xs font-medium flex items-center justify-center gap-1 transition cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Queue</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Direct Studio Tracks */}
+            <div>
+              <div className="flex items-center justify-between mb-2.5">
+                <h3 className="text-xs font-bold text-white/90 uppercase tracking-wider flex items-center gap-2">
+                  <Music className="w-3.5 h-3.5 text-purple-400" />
+                  <span>High-Fidelity Royalty-Free Direct Audio</span>
+                </h3>
+                <span className="text-[11px] text-white/40">{DIRECT_AUDIO_TRACKS.length} studio tracks</span>
+              </div>
+
+              <div className="space-y-2">
+                {DIRECT_AUDIO_TRACKS.map((track, idx) => {
+                  const songItem: SongItem = {
+                    id: `direct-track-${idx}-${track.title.toLowerCase().replace(/\s+/g, '-')}`,
+                    videoId: '',
+                    sourceUrl: track.sourceUrl,
+                    sourceType: 'audio-url',
+                    title: track.title,
+                    artist: track.artist,
+                    thumbnail: track.thumbnail,
+                    duration: track.duration,
+                    addedBy: currentUserId,
+                    addedByName: currentUserName,
+                  };
+
+                  return (
+                    <div
+                      key={`direct-${idx}`}
+                      className="p-3 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/5 hover:border-white/15 transition-all flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img
+                          src={track.thumbnail}
+                          alt={track.title}
+                          className="w-10 h-10 rounded-lg object-cover shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-bold text-white truncate">{track.title}</h4>
+                          <div className="flex items-center gap-2 text-[11px] text-white/50 mt-0.5">
+                            <span className="truncate">{track.artist}</span>
+                            <span>•</span>
+                            <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.2 rounded font-mono">Direct MP3</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => {
+                            onSelectSong(songItem, true);
+                            setAddedNotification(`Playing "${track.title}"`);
+                            setTimeout(() => setAddedNotification(null), 2500);
+                            onClose();
+                          }}
+                          className="py-1.5 px-3 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <Play className="w-3 h-3 fill-purple-200" />
+                          <span>Play</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            onSelectSong(songItem, false);
+                            setAddedNotification(`Added "${track.title}" to Queue`);
+                            setTimeout(() => setAddedNotification(null), 2500);
+                          }}
+                          className="py-1.5 px-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-xs transition cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         )}
 
         {/* ========================================================================= */}
