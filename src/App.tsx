@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   UserProfile,
-  RoomData,
   PlaybackState,
   SongItem,
   DeviceMode,
@@ -23,6 +22,7 @@ import { AmbientBackground } from './components/AmbientBackground';
 import { MasterQueueView } from './components/MasterQueueView';
 import { RadioBroadcasterModal } from './components/RadioBroadcasterModal';
 import { RadioStation } from './musicCatalog';
+import { useRoomSocket } from './hooks/useRoomSocket';
 import {
   sendAlert,
   getNativeNotificationPermission,
@@ -66,9 +66,6 @@ export default function App() {
   });
 
   // Room authoritative state
-  const [roomData, setRoomData] = useState<RoomData | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isPendingApproval, setIsPendingApproval] = useState(false);
 
   // Device Frame View
   const [deviceMode, setDeviceMode] = useState<DeviceMode>('responsive');
@@ -129,8 +126,22 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [ambientMode, toggleAmbientMode, showMusicSearch, showMembersModal, showExportModal, showLoginModal, showNotificationModal]);
 
-  const socketRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<any>(null);
+  // Room WebSocket lifecycle + authoritative room state.
+  const handleRemoved = useCallback((serverMessage: string) => {
+    window.alert(serverMessage);
+    setShowMembersModal(false);
+    localStorage.removeItem(STORAGE_KEY_USER);
+    setCurrentUser(null);
+    setShowLoginModal(true);
+  }, []);
+
+  const {
+    roomData,
+    isConnected,
+    isPendingApproval,
+    sendSocketEvent,
+    disconnect,
+  } = useRoomSocket({ user: currentUser, roomId, onRemoved: handleRemoved });
 
   // References to detect state changes for native push notifications
   const prevBatonOwnerRef = useRef<string | null>(null);
@@ -200,128 +211,13 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    socketRef.current?.close();
-    socketRef.current = null;
-    setRoomData(null);
-    setIsConnected(false);
-    setIsPendingApproval(false);
+    disconnect();
     localStorage.removeItem(STORAGE_KEY_USER);
     setCurrentUser(null);
     setShowLoginModal(true);
   };
 
-  // Connect to WebSocket Server
-  const connectWebSocket = useCallback(() => {
-    if (!currentUser) return;
-
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    const ws = new WebSocket(wsUrl);
-    socketRef.current = ws;
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      // Join room
-      ws.send(
-        JSON.stringify({
-          type: 'room:join',
-          roomId,
-          user: currentUser,
-        })
-      );
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-
-        if (message.type === 'room:sync') {
-          setRoomData(message.data);
-          setIsPendingApproval(false);
-        } else if (message.type === 'room:pending_approval') {
-          setIsPendingApproval(true);
-        } else if (message.type === 'room:removed' || message.type === 'room:deleted') {
-          window.alert(message.message);
-          setRoomData(null);
-          setShowMembersModal(false);
-          localStorage.removeItem(STORAGE_KEY_USER);
-          setCurrentUser(null);
-          setShowLoginModal(true);
-          ws.close();
-        } else if (message.type === 'notification:toast') {
-          sendAlert({
-            title: message.title || 'Room Queue Alert',
-            body: message.message,
-            type: message.level === 'warning' ? 'warning' : 'queue',
-          });
-        } else if (message.type === 'chat:new') {
-          setRoomData((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              chat: [...prev.chat.slice(-50), message.data],
-            };
-          });
-
-          // Trigger reaction visual if reaction type
-          if (message.data.type === 'reaction') {
-            confetti({
-              particleCount: 20,
-              spread: 50,
-              origin: { y: 0.7 },
-            });
-          }
-        }
-      } catch (err) {
-        console.error('WebSocket receive error:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      if (socketRef.current !== ws) return;
-      setIsConnected(false);
-      // Reconnect after 2 seconds
-      reconnectTimeoutRef.current = setTimeout(() => {
-        connectWebSocket();
-      }, 2500);
-    };
-
-    ws.onerror = (err) => {
-      console.warn('WebSocket connection error:', err);
-    };
-  }, [currentUser, roomId]);
-
-  useEffect(() => {
-    if (currentUser) {
-      connectWebSocket();
-    }
-    return () => {
-      if (socketRef.current) socketRef.current.close();
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-    };
-  }, [currentUser, roomId, connectWebSocket]);
-
-  // Actions dispatched to WebSocket Server
-  const sendSocketEvent = (type: string, data?: any) => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && currentUser) {
-      socketRef.current.send(
-        JSON.stringify({
-          type,
-          roomId,
-          user: currentUser,
-          data,
-        })
-      );
-    }
-  };
+  // Connect to WebSocket Server (lifecycle owned by useRoomSocket)
 
   // Baton Actions
   const handleRequestBaton = () => {

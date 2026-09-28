@@ -1,4 +1,5 @@
 import { SongItem } from './types';
+import { parseYouTubeId } from './lib/audioSource';
 
 export interface RadioStation {
   id: string;
@@ -327,30 +328,5 @@ export const CURATED_TRACKS: Omit<SongItem, 'id' | 'addedBy' | 'addedByName'>[] 
 ];
 
 export function extractYouTubeVideoId(input: string): string | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-
-  // Direct 11-char ID
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  // URL formats:
-  // https://www.youtube.com/watch?v=VIDEO_ID
-  // https://music.youtube.com/watch?v=VIDEO_ID
-  // https://youtu.be/VIDEO_ID
-  // https://www.youtube.com/embed/VIDEO_ID
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|music\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-    /[?&]v=([a-zA-Z0-9_-]{11})/,
-  ];
-
-  for (const regex of patterns) {
-    const match = trimmed.match(regex);
-    if (match && match[1]) {
-      return match[1];
-    }
-  }
-
-  return null;
+  return parseYouTubeId(input);
 }

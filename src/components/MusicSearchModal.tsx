@@ -237,15 +237,14 @@ export const MusicSearchModal: React.FC<MusicSearchModalProps> = ({
       return;
     }
 
-    // Attach fallback stream for mobile/S25 Ultra if YouTube restricts embedding
-    const randomFallback = DIRECT_AUDIO_TRACKS[Math.floor(Math.random() * DIRECT_AUDIO_TRACKS.length)];
+    // YouTube songs play through the hidden IFrame player (audio-only). Do NOT attach a
+    // sourceUrl here: a sourceUrl forces the direct-audio engine and the video is never played.
     const song: SongItem = {
       id: `song-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       videoId,
-      sourceUrl: randomFallback.sourceUrl,
-      sourceType: 'audio-url',
+      sourceType: 'youtube',
       title: customTitle.trim() || `YouTube Track (${videoId})`,
-      artist: customArtist.trim() || 'YouTube Music Stream',
+      artist: customArtist.trim() || 'YouTube Music',
       thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
       duration: 240,
       addedBy: currentUserId,

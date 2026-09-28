@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PlaybackState, SongItem } from '../types';
-import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand, AlertCircle, Tv, Zap, ExternalLink } from 'lucide-react';
+import { Play, Pause, SkipForward, Volume2, VolumeX, Crown, Radio, Disc, Sparkles, Sliders, Hand, AlertCircle, Zap, ExternalLink } from 'lucide-react';
 import { PersonalVolumeMixer } from './PersonalVolumeMixer';
+import { calculateExpectedTime as computeExpectedTime } from '../lib/playbackSync';
+import { isAudioSource as resolveIsAudioSource, isLiveRadio as resolveIsLiveRadio } from '../lib/audioSource';
 
 interface AudioPlayerProps {
   playback: PlaybackState;
@@ -50,33 +52,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [youtubeError, setYoutubeError] = useState<number | null>(null);
-  const [showVideoPlayer, setShowVideoPlayer] = useState(false);
   const [isMobileViewport] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 639px)').matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
   });
 
   const currentSong = playback.currentSong;
-  const isAudioSource = Boolean(currentSong?.sourceUrl);
-  const isLiveRadio = Boolean(
-    currentSong?.sourceType === 'audio-url' &&
-    ((currentSong?.duration || 0) >= 3600 ||
-      currentSong?.title?.toLowerCase().includes('radio') ||
-      currentSong?.artist?.toLowerCase().includes('radio') ||
-      currentSong?.sourceUrl?.includes('stream') ||
-      currentSong?.sourceUrl?.includes('icecast'))
-  );
+  const isAudioSource = resolveIsAudioSource(currentSong);
+  const isLiveRadio = resolveIsLiveRadio(currentSong);
   const lastSourceUrlRef = useRef<string>('');
 
   // Helper: compute expected server playback timestamp accounting for network transit
-  const calculateExpectedTime = useCallback(() => {
-    if (!playback.isPlaying) {
-      return playback.currentTime;
-    }
-    const elapsed = (Date.now() - playback.updatedAt) / 1000;
-    const computed = playback.currentTime + elapsed;
-    return Math.min(computed, playback.duration || 3600);
-  }, [playback.isPlaying, playback.currentTime, playback.updatedAt, playback.duration]);
+  const calculateExpectedTime = useCallback(
+    () => computeExpectedTime(playback),
+    [playback.isPlaying, playback.currentTime, playback.updatedAt, playback.duration]
+  );
 
   // Direct Audio Unlocker for Mobile Autoplay Policy (Samsung S25 Ultra / Android Chrome / WebViews)
   const unlockAudio = useCallback(async () => {
@@ -206,11 +196,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             onError: (event: any) => {
               console.warn('YouTube Player error code:', event.data);
               setYoutubeError(event.data);
-              // On Error 150 / 101, make video player visible so user can interact with native mobile player directly
-              if (event.data === 150 || event.data === 101) {
-                setShowVideoPlayer(true);
-              }
-              // Auto-advance if video is blocked from embedding by copyright owner
+              // Audio-only app: never reveal the video surface. Auto-skip owner-blocked videos.
               if ((event.data === 150 || event.data === 101 || event.data === 100) && hasBaton && onNextTrack) {
                 setTimeout(() => {
                   onNextTrack();
@@ -314,6 +300,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   useEffect(() => {
     if (!playerRef.current || !playerReady) return;
     if (isAudioSource) {
+      // Direct-audio song: the YouTube engine is idle, so any prior YT error is irrelevant.
+      setYoutubeError(null);
       try {
         playerRef.current.pauseVideo?.();
       } catch (e) {}
@@ -682,20 +670,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </button>
           )}
 
-          {/* Toggle between Turntable and Video View */}
-          <button
-            onClick={() => setShowVideoPlayer(!showVideoPlayer)}
-            title={showVideoPlayer ? 'Switch to Vinyl Turntable' : 'Watch YouTube Video'}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition cursor-pointer ${
-              showVideoPlayer
-                ? 'bg-purple-600 text-white border-purple-400 shadow-sm'
-                : 'bg-white/5 text-white/70 border-white/10 hover:text-white hover:bg-white/10'
-            }`}
-          >
-            <Tv className="w-3.5 h-3.5" />
-            <span>{showVideoPlayer ? 'Vinyl View' : 'Watch Video'}</span>
-          </button>
-
           {/* Baton Owner indicator */}
           <div className="flex items-center gap-1.5 text-xs">
             {hasBaton ? (
@@ -712,14 +686,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         </div>
       </div>
 
-      {/* YouTube IFrame container: Standard dimensions maintain mobile Chrome background audio execution */}
-      <div
-        className={
-          showVideoPlayer
-            ? 'relative w-full aspect-video rounded-2xl overflow-hidden mb-5 bg-black border border-white/10 shadow-2xl transition-all'
-            : 'fixed -left-[9999px] -top-[9999px] w-[360px] h-[240px] opacity-0 pointer-events-none'
-        }
-      >
+      {/* Hidden YouTube IFrame: audio-only. Kept off-screen so YouTube's video/error UI never shows. */}
+      <div className="fixed -left-[9999px] -top-[9999px] w-[360px] h-[240px] opacity-0 pointer-events-none">
         <div id="youtube-player-element" className="w-full h-full" />
       </div>
 
@@ -777,7 +745,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       )}
 
       {/* Embed Restriction Warning & S25 Ultra Mobile Alternative Engine */}
-      {youtubeError && (
+      {youtubeError && !isAudioSource && (
         <div className="w-full mb-4 p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-rose-500/15 to-purple-500/15 border border-amber-400/40 text-white text-sm shadow-xl">
           <div className="flex items-start gap-3">
             <Radio className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
@@ -800,16 +768,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <Zap className="w-3.5 h-3.5 fill-slate-950 text-slate-950" />
                   <span>Switch to Direct Audio Stream 🔊</span>
                 </button>
-
-                {!showVideoPlayer && (
-                  <button
-                    onClick={() => setShowVideoPlayer(true)}
-                    className="px-3.5 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/40 border border-purple-400/40 text-purple-200 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-purple-200" />
-                    <span>Reveal Video Player</span>
-                  </button>
-                )}
 
                 {currentSong?.videoId && (
                   <button

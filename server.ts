@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
+import { songsMatch } from './src/lib/songMatch';
 
 interface ClientSocket extends WebSocket {
   roomId?: string;
@@ -119,18 +120,20 @@ function getOrCreateRoom(roomId: string, name?: string, isPrivate = false, pin?:
       playback: {
         currentSong: {
           id: 'song-1',
-          videoId: '4NRXx6U8ABQ',
-          title: 'Blinding Lights',
-          artist: 'The Weeknd',
-          thumbnail: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=400&auto=format&fit=crop&q=80',
-          duration: 200,
+          videoId: '',
+          sourceUrl: 'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3',
+          sourceType: 'audio-url',
+          title: 'Lofi Study Night',
+          artist: 'FASSounds',
+          thumbnail: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=400&auto=format&fit=crop&q=80',
+          duration: 147,
           addedBy: hostId,
           addedByName: hostName,
         },
         isPlaying: false,
         currentTime: 0,
         updatedAt: Date.now(),
-        duration: 200,
+        duration: 147,
         updatedBy: hostId,
         masterVolume: 80,
       },
@@ -169,21 +172,25 @@ function getOrCreateRoom(roomId: string, name?: string, isPrivate = false, pin?:
       masterQueue: [
         {
           id: 'song-2',
-          videoId: 'TUVcZfQe-Kw',
-          title: 'Levitating',
-          artist: 'Dua Lipa',
-          thumbnail: 'https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=400&auto=format&fit=crop&q=80',
-          duration: 203,
+          videoId: '',
+          sourceUrl: 'https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0a13f69d2.mp3',
+          sourceType: 'audio-url',
+          title: 'Synthwave Boulevard',
+          artist: 'StreamBeats',
+          thumbnail: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=400&auto=format&fit=crop&q=80',
+          duration: 172,
           addedBy: hostId || 'host-1',
           addedByName: hostName || 'DJ',
         },
         {
           id: 'song-3',
-          videoId: 'kJQP7kiw5Fk',
-          title: 'Despacito',
-          artist: 'Luis Fonsi ft. Daddy Yankee',
-          thumbnail: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=400&auto=format&fit=crop&q=80',
-          duration: 228,
+          videoId: '',
+          sourceUrl: 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c7a73d67.mp3',
+          sourceType: 'audio-url',
+          title: 'Acoustic Morning Breeze',
+          artist: 'Lesfm',
+          thumbnail: 'https://images.unsplash.com/photo-1510915361894-db8b60106cb1?w=400&auto=format&fit=crop&q=80',
+          duration: 160,
           addedBy: hostId || 'host-1',
           addedByName: hostName || 'DJ',
         }
@@ -373,6 +380,20 @@ async function startServer() {
 
   // WebSocket Server
   const wss = new WebSocketServer({ server });
+
+  // Heartbeat: drop half-open sockets whose clients vanished without a close frame.
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const sock = client as ClientSocket;
+      if (sock.isAlive === false) {
+        sock.terminate();
+        return;
+      }
+      sock.isAlive = false;
+      sock.ping();
+    });
+  }, 30000);
+  wss.on('close', () => clearInterval(heartbeatInterval));
 
   function broadcastRoom(roomId: string, message: any, excludeWs?: WebSocket) {
     const dataStr = JSON.stringify(message);
@@ -772,13 +793,7 @@ async function startServer() {
           if (activeSong) {
             room.playback.currentSong = activeSong;
             // Add to playlist history if not already there
-            const songMatchesHistory = (p: any) => {
-              if (activeSong.videoId && p.videoId && p.videoId.trim() === activeSong.videoId.trim()) return true;
-              if (activeSong.sourceUrl && p.sourceUrl && p.sourceUrl.trim() === activeSong.sourceUrl.trim()) return true;
-              if (activeSong.title && p.title && activeSong.title.trim().toLowerCase() === p.title.trim().toLowerCase()) return true;
-              return false;
-            };
-            if (!room.playlist.some(songMatchesHistory)) {
+            if (!room.playlist.some((p) => songsMatch(activeSong, p))) {
               room.playlist.push(activeSong);
             }
           }
@@ -811,22 +826,7 @@ async function startServer() {
           if (!song || !song.title) return;
 
           // Duplicate verification: Check against current playing song and master queue
-          const normTitle = (song.title || '').trim().toLowerCase();
-          const normArtist = (song.artist || '').trim().toLowerCase();
-          const songVideoId = (song.videoId || '').trim();
-          const songSourceUrl = (song.sourceUrl || '').trim();
-
-          const isSongMatch = (other: any) => {
-            if (!other) return false;
-            if (songVideoId && other.videoId && other.videoId.trim() === songVideoId) return true;
-            if (songSourceUrl && other.sourceUrl && other.sourceUrl.trim() === songSourceUrl) return true;
-            if (normTitle && other.title && other.title.trim().toLowerCase() === normTitle) {
-              if (normArtist && other.artist && other.artist.trim().toLowerCase() === normArtist) {
-                return true;
-              }
-            }
-            return false;
-          };
+          const isSongMatch = (other: any) => songsMatch(song, other, { requireArtist: true });
 
           const isDuplicateOfCurrent = Boolean(room.playback.currentSong && isSongMatch(room.playback.currentSong));
           const isDuplicateInQueue = room.masterQueue.some((q) => isSongMatch(q));
@@ -950,7 +950,26 @@ async function startServer() {
         if (type === 'queue:reorder') {
           const room = rooms.get(roomId);
           if (!room) return;
-          const { fromIndex, toIndex } = data || {};
+          const { queue, fromIndex, toIndex } = data || {};
+
+          // Preferred contract: client sends the full reordered queue array.
+          if (Array.isArray(queue)) {
+            const byId = new Map(room.masterQueue.map((s) => [s.id, s]));
+            // Only accept a true permutation of the existing queue (no adds/drops).
+            const isPermutation =
+              queue.length === room.masterQueue.length &&
+              queue.every((s: any) => s && byId.has(s.id));
+            if (isPermutation) {
+              room.masterQueue = queue.map((s: any) => byId.get(s.id)!);
+              broadcastRoom(roomId, {
+                type: 'room:sync',
+                data: serializeRoom(room),
+              });
+            }
+            return;
+          }
+
+          // Legacy contract: move a single track by index.
           if (
             typeof fromIndex === 'number' &&
             typeof toIndex === 'number' &&
@@ -1076,17 +1095,7 @@ async function startServer() {
           let added = 0;
           let duplicates = 0;
 
-          const matchSongInList = (s: any, list: any[]) => {
-            const sVid = (s.videoId || '').trim();
-            const sUrl = (s.sourceUrl || '').trim();
-            const sTitle = (s.title || '').trim().toLowerCase();
-            return list.some((item) => {
-              if (sVid && item.videoId && item.videoId.trim() === sVid) return true;
-              if (sUrl && item.sourceUrl && item.sourceUrl.trim() === sUrl) return true;
-              if (sTitle && item.title && item.title.trim().toLowerCase() === sTitle) return true;
-              return false;
-            });
-          };
+          const matchSongInList = (s: any, list: any[]) => list.some((item) => songsMatch(s, item));
 
           if (mode === 'replace') {
             const newQ: any[] = [];
