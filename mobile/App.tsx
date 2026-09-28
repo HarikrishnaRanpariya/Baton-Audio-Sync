@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
+  Platform,
   SafeAreaView,
+  StatusBar as RNStatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -245,7 +247,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: '#12141c',
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    // Inset below the Android status bar so the bar doesn't render under the clock/icons.
+    paddingTop: (Platform.OS === 'android' ? RNStatusBar.currentHeight ?? 0 : 0) + 8,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#1e212d',
   },

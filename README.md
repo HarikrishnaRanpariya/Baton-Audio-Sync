@@ -2,6 +2,54 @@
 
 Baton Audio Sync contains the web application and an Expo Android project in `mobile/`.
 
+## Local development
+
+Requirements: Node 18+, npm.
+
+```bash
+npm install     # web app + server dependencies
+npm run dev     # web client + WebSocket server on http://localhost:3000
+npm run lint    # type-check (tsc --noEmit)
+npm test        # unit tests (vitest)
+```
+
+`npm run dev` serves the React web client and the realtime WebSocket server from a
+single process. All product features live in the web app (`src/`); the `mobile/`
+project is a thin Expo WebView shell for Android and iOS that loads this same web app.
+
+### Run on an Android emulator (macOS)
+
+```bash
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export PATH="$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH"
+emulator -list-avds
+emulator -avd <YOUR_AVD>          # e.g. Samsung_S25_Ultra
+```
+
+With `npm run dev` running on the host, open the Baton app on the emulator and pick the
+**Emulator (10.0.2.2:3000)** preset — the emulator reaches the host through `10.0.2.2`.
+A physical phone on the same Wi-Fi uses `http://<YOUR_COMPUTER_IP>:3000`.
+
+## Testing
+
+Unit tests sit next to the shared, platform-agnostic core in `src/lib/` and run with vitest:
+
+```bash
+npm test            # single run
+npm run test:watch  # watch mode
+```
+
+## Audio playback notes
+
+- Playback is **audio-only**. YouTube songs play through a hidden player (no video surface).
+  A minority of YouTube videos disable embedding (Error 150) and cannot play in any embedded
+  player — use the direct-audio catalog or live radio, which always play.
+- Mobile browsers and WebViews block autoplay: the first time you open a room, **tap the green
+  "Tap to Synchronize Audio with Room"** button once to unlock sound.
+- On an emulator, audio is routed to your computer's default output. Make sure the host volume
+  is up and the emulator's media volume is not muted:
+  `adb shell cmd media_session volume --stream 3 --set 15`.
+
 ## Android Preview APK
 
 Run EAS commands from the `mobile` directory, not the repository root:

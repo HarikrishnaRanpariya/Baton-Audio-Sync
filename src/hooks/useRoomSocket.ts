@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
 import { RoomData, UserProfile } from '../types';
 import { sendAlert } from '../services/notificationService';
+import { CLIENT_EVENTS, SERVER_EVENTS, type ClientEventType } from '../lib/protocol';
 
 interface UseRoomSocketOptions {
   user: UserProfile | null;
@@ -14,7 +15,7 @@ interface UseRoomSocket {
   roomData: RoomData | null;
   isConnected: boolean;
   isPendingApproval: boolean;
-  sendSocketEvent: (type: string, data?: any) => void;
+  sendSocketEvent: (type: ClientEventType, data?: any) => void;
   disconnect: () => void;
 }
 
@@ -45,7 +46,7 @@ export function useRoomSocket({ user, roomId, onRemoved }: UseRoomSocketOptions)
       setIsConnected(true);
       ws.send(
         JSON.stringify({
-          type: 'room:join',
+          type: CLIENT_EVENTS.ROOM_JOIN,
           roomId,
           user,
         })
@@ -56,23 +57,23 @@ export function useRoomSocket({ user, roomId, onRemoved }: UseRoomSocketOptions)
       try {
         const message = JSON.parse(event.data);
 
-        if (message.type === 'room:sync') {
+        if (message.type === SERVER_EVENTS.ROOM_SYNC) {
           setRoomData(message.data);
           setIsPendingApproval(false);
-        } else if (message.type === 'room:pending_approval') {
+        } else if (message.type === SERVER_EVENTS.ROOM_PENDING_APPROVAL) {
           setIsPendingApproval(true);
-        } else if (message.type === 'room:removed' || message.type === 'room:deleted') {
+        } else if (message.type === SERVER_EVENTS.ROOM_REMOVED || message.type === SERVER_EVENTS.ROOM_DELETED) {
           setRoomData(null);
           onRemovedRef.current(message.message);
           ws.close();
-        } else if (message.type === 'notification:toast') {
+        } else if (message.type === SERVER_EVENTS.NOTIFICATION_TOAST) {
           const toast = message.data || {};
           sendAlert({
             title: toast.title || 'Room Queue Alert',
             body: toast.message || '',
             type: toast.type === 'warning' ? 'warning' : 'queue',
           });
-        } else if (message.type === 'chat:new') {
+        } else if (message.type === SERVER_EVENTS.CHAT_NEW) {
           setRoomData((prev) => {
             if (!prev) return prev;
             return {
@@ -118,7 +119,7 @@ export function useRoomSocket({ user, roomId, onRemoved }: UseRoomSocketOptions)
   }, [user, roomId, connectWebSocket]);
 
   const sendSocketEvent = useCallback(
-    (type: string, data?: any) => {
+    (type: ClientEventType, data?: any) => {
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && user) {
         socketRef.current.send(
           JSON.stringify({

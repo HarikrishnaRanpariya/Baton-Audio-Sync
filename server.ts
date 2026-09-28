@@ -6,7 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
-import { songsMatch } from './src/lib/songMatch';
+import { songsMatch, SERVER_EVENTS } from './src/lib';
 
 interface ClientSocket extends WebSocket {
   roomId?: string;
@@ -448,7 +448,7 @@ async function startServer() {
                 joinedAt: Date.now(),
               });
               ws.send(JSON.stringify({
-                type: 'room:pending_approval',
+                type: SERVER_EVENTS.ROOM_PENDING_APPROVAL,
                 data: { roomId, message: 'Request sent to group host for approval.' },
               }));
               broadcastRoom(roomId, {
@@ -560,7 +560,7 @@ async function startServer() {
           wss.clients.forEach((client) => {
             const target = client as ClientSocket;
             if (target.userId === targetUserId && target.readyState === WebSocket.OPEN) {
-              target.send(JSON.stringify({ type: 'room:removed', message: 'You were removed from this group by the host.' }));
+              target.send(JSON.stringify({ type: SERVER_EVENTS.ROOM_REMOVED, message: 'You were removed from this group by the host.' }));
               target.close();
             }
           });
@@ -575,7 +575,7 @@ async function startServer() {
           wss.clients.forEach((client) => {
             const target = client as ClientSocket;
             if (target.roomId === roomId && target.readyState === WebSocket.OPEN) {
-              target.send(JSON.stringify({ type: 'room:deleted', message: 'This group was deleted by the host.' }));
+              target.send(JSON.stringify({ type: SERVER_EVENTS.ROOM_DELETED, message: 'This group was deleted by the host.' }));
               target.close();
             }
           });
@@ -1198,7 +1198,7 @@ async function startServer() {
           room.chat.push(newMsg);
 
           broadcastRoom(roomId, {
-            type: 'chat:new',
+            type: SERVER_EVENTS.CHAT_NEW,
             data: newMsg,
           });
         }
